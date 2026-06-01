@@ -3,7 +3,7 @@
 > Automated Carbon Footprint Quantification & ESG Analysis using Explainable AI
 
 ## Overview
-![Overview](D:\Chuyên ngành 9\Đồ án\img\Module 1.jpg)
+![Overview](img/Module%201.jpg)
 
 Eco-Lens is an AI-powered system that automates the analysis of ESG (Environmental, Social, and Governance) reports. It reads complex ESG documents in PDF or digitized formats, extracts carbon emission data, classifies emissions by GHG Protocol scopes (Scope 1, 2, 3), cross-references results against international standards via RAG, and provides explainable AI outputs to support audits, investment decisions, and greenwashing detection.
 
@@ -124,5 +124,4 @@ The primary dataset uses Vietnamese enterprise reports to ensure relevance to lo
 | Vector Database | FAISS / ChromaDB |
 | Framework | PyTorch, Hugging Face Transformers |
 =======
-Hi
->>>>>>> 243b08481f4b6bed94b937237e5237012dba1654
+
