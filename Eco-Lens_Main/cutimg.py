@@ -7,7 +7,7 @@ import fitz  # PyMuPDF
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 PDF_DIR = PROJECT_ROOT / "Dataset"
-IMG_DIR = PROJECT_ROOT / "img"
+IMG_DIR = PROJECT_ROOT / "DatasetIMG"
 
 ZOOM = 4
 
