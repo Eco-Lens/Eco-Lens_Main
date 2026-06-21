@@ -2,4 +2,7 @@
 /Dataset/*
 # Image files
 /DatasetIMG/*
-/hao/*
+# OCR files
+/DatasetOCR/*
+#Documentation
+/Eco-Lens_Main/Eco-Lens_docx/*

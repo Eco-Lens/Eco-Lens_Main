@@ -5,7 +5,7 @@
 ## Overview
 ![Overview](img/Module%201.jpg)
 
-Eco-Lens is an AI-powered system that automates the analysis of ESG (Environmental, Social, and Governance) reports. It reads complex ESG documents in PDF or digitized formats, extracts carbon emission data, classifies emissions by GHG Protocol scopes (Scope 1, 2, 3), cross-references results against international standards via RAG, and provides explainable AI outputs to support audits, investment decisions, and greenwashing detection.
+Eco-Lens is an AI-powered system that automates the analysis of ESG (Environmental, Social, and Governance) reports. It reads complex ESG documents in PDF or digitized formats, extracts carbon emission data, classifies emissions by GHG Protocol scopes (Scope 1, 2, 3), and cross-references results against international standards via RAG to support audits and investment decisions.
 
 ## Problem Statement
 
@@ -14,15 +14,14 @@ Modern ESG reports are structurally complex — mixing narrative text, data tabl
 - **Time-consuming** and labor-intensive
 - **Difficult to standardize** across different reporting formats
 - **Prone to misclassification** of emission scopes (Scope 1 vs. 2 vs. 3)
-- **Vulnerable to greenwashing** — companies overstating green claims while quantitative data tells a different story
-- **Hard to audit** — black-box AI predictions lack traceability and explainability
+- **Hard to audit** — black-box AI predictions lack traceability
 
 ## Target Users
 
 | User Group | Primary Needs |
 |---|---|
 | **Business Leaders** | Monitor emission trends, track Net Zero progress, support strategic decisions (e.g., supplier change, solar investment), forecast future carbon costs, ensure compliance |
-| **Auditors / Regulators / Third Parties** | Verify ESG authenticity, detect greenwashing, trace AI predictions to source data, evaluate environmental compliance |
+| **Auditors / Regulators / Third Parties** | Verify ESG authenticity, evaluate environmental compliance |
 | **Investors** | Assess long-term sustainability risk, evaluate governance transparency, identify supply chain carbon exposure, screen ESG portfolio eligibility |
 
 ## Architecture
@@ -71,20 +70,12 @@ Structured ESG Data
 }
 ```
 
-### Module 2 — Explainable AI & Forecasting (Future)
-
-Planned extensions beyond the core pipeline:
-
-- **XAI (Explainable AI)** — Trace every prediction to its source data (specific table cell or sentence), highlight influential data points, support audit verification
-- **Greenwashing Detection** — Cross-reference qualitative ESG claims (e.g., "eco-friendly", "sustainable") against quantitative emission data to flag inconsistencies
-- **Carbon Price Forecasting** — Time-series forecasting (PatchTST) to predict future carbon prices and support financial planning
-
 ## Data Strategy
 
 | Source | Details |
 |---|---|
 | **Primary Dataset** | 300+ sustainability reports from Vietnamese enterprises |
-| **Augmentation** | Hugging Face NLP datasets for climate-text classification, greenwashing detection, financial sentiment |
+| **Augmentation** | Hugging Face NLP datasets for climate-text classification, financial sentiment |
 | **Standards Knowledge Base** | GHG Protocol & GRI Standards (permanently connected via RAG) |
 | **Legal Context** | Climate Change Laws of the World dataset |
 | **Train/Test Split** | 80% training / 20% testing |
@@ -98,9 +89,9 @@ The primary dataset uses Vietnamese enterprise reports to ensure relevance to lo
 | **Phase 1** | Weeks 1–4 | Data collection, cleaning, and labeling; PaddleOCR text extraction; LayoutLMv3 pre-training on ESG document layout |
 | **Phase 2** | Weeks 5–8 | Fine-tune Microsoft Table Transformer for emission table parsing; handle merged cells and multi-row headers |
 | **Phase 3** | Weeks 9–12 | Integrate ClimateBERT for semantic scope classification; deploy BGE-large RAG pipeline with GHG/GRI standards |
-| **Phase 4** | Weeks 13–16 | Full pipeline integration; rigorous testing on real ESG reports; architectural design for Module 2 (XAI & greenwashing detection) |
+| **Phase 4** | Weeks 13–16 | Full pipeline integration and rigorous testing on real ESG reports |
 
-**Total: 16 weeks** for Module 1 completion and Module 2 blueprint.
+**Total: 16 weeks** for Module 1 completion.
 
 ## Expected Outcomes
 
@@ -108,8 +99,7 @@ The primary dataset uses Vietnamese enterprise reports to ensure relevance to lo
 2. A cleaned dataset of extracted emission figures, normalized to international standards
 3. An intelligent classifier automatically assigning emissions to Scope 1, 2, and 3
 4. Structured ESG data output with full provenance (source page, unit, referenced standard)
-5. A production-ready foundation for Module 2 extensions (XAI, greenwashing detection, carbon forecasting)
-6. A prototype that reduces manual ESG processing workload and increases data verifiability for enterprises and auditors
+5. A prototype that reduces manual ESG processing workload and increases data verifiability for enterprises and auditors
 
 ## Technology Stack
 
@@ -120,7 +110,6 @@ The primary dataset uses Vietnamese enterprise reports to ensure relevance to lo
 | Table Parsing | Microsoft Table Transformer |
 | Scope Classification | ClimateBERT |
 | Standards Retrieval (RAG) | BGE-large Embeddings |
-| Forecasting | PatchTST (planned) |
 | Vector Database | FAISS / ChromaDB |
 | Framework | PyTorch, Hugging Face Transformers |
 =======
