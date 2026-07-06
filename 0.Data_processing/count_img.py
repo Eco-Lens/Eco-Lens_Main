@@ -2,7 +2,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-HAO_DIR = PROJECT_ROOT / "DatasetIMG"
+HAO_DIR = PROJECT_ROOT / "DatasetIMG_Reduce"
 
 
 def check_folders():

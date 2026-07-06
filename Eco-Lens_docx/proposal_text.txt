@@ -1,0 +1,813 @@
+Project Title
+Xây dựng hệ thống định lượng phát thải Carbon và phân tích báo cáo ESG tự động dựa trên Trí tuệ nhân tạo có khả năng giải thích XAI
+(Automated Carbon Footprint Quantification and ESG Analysis using Explainable AI)
+
+
+1. Executive Summary
+Biến đổi khí hậu, yêu cầu minh bạch ESG và các quy định liên quan đến phát thải Carbon đang khiến doanh nghiệp phải công bố dữ liệu môi trường một cách chính xác, có thể kiểm chứng và dễ giải thích. Báo cáo ESG hiện không chỉ phục vụ truyền thông thương hiệu mà còn ảnh hưởng đến compliance, đánh giá từ nhà đầu tư, kiểm toán bền vững và khả năng tham gia chuỗi cung ứng quốc tế.
+Tuy nhiên, các báo cáo ESG thường có cấu trúc phức tạp, bao gồm văn bản, bảng số liệu, biểu đồ và nhiều thuật ngữ chuyên ngành. Việc đọc, trích xuất và đánh giá thủ công các báo cáo này tốn nhiều thời gian, khó chuẩn hóa và tiềm ẩn nguy cơ sai lệch hoặc “greenwashing”.
+Dự án đề xuất xây dựng một hệ thống AI hỗ trợ tự động hóa quá trình phân tích ESG, bao gồm:
+Đọc và hiểu báo cáo ESG dưới dạng PDF hoặc tài liệu số hóa.
+Trích xuất dữ liệu phát thải Carbon.
+Phân loại dữ liệu theo Scope 1, Scope 2 và Scope 3.
+Định lượng phát thải Carbon.
+Hệ thống sử dụng:
+OCR kết hợp LayoutLMv3 để xử lý tài liệu đa phương thức.
+RAG để đối chiếu dữ liệu với các chuẩn như GRI Standards và GHG Protocol.
+LayoutLMv3 được lựa chọn vì báo cáo ESG là loại tài liệu có cấu trúc phức tạp, chứa nhiều bảng biểu và thông tin layout. Mô hình này cho phép hệ thống hiểu đồng thời nội dung văn bản, vị trí và bố cục tài liệu thay vì chỉ đọc text thuần như OCR truyền thống.
+RAG được sử dụng để hỗ trợ đối chiếu dữ liệu trích xuất với các tiêu chuẩn ESG như GHG Protocol và GRI Standards, giúp hệ thống tăng khả năng chuẩn hóa dữ liệu và giảm nguy cơ phân loại sai Scope phát thải.
+Mục tiêu cuối cùng của dự án là xây dựng một hệ thống AI hỗ trợ doanh nghiệp, kiểm toán viên, nhà đầu tư và các bên liên quan tự động hóa quá trình phân tích ESG, tăng tính minh bạch của dữ liệu Carbon và hỗ trợ ra quyết định liên quan đến phát thải và chiến lược bền vững.
+
+2. Problem Statement
+Hiện nay, các doanh nghiệp ngày càng phải công bố thông tin liên quan đến môi trường, xã hội và quản trị (ESG). Tại châu Âu, doanh nghiệp có quy mô nhất định phải công bố thông tin về rủi ro, cơ hội và tác động liên quan đến các vấn đề môi trường và xã hội nhằm hỗ trợ nhà đầu tư, người tiêu dùng và các bên liên quan đánh giá hiệu quả bền vững của doanh nghiệp.
+Bên cạnh compliance, dữ liệu ESG còn ảnh hưởng đến:
+Đánh giá của nhà đầu tư.
+Kiểm toán bền vững.
+Uy tín doanh nghiệp.
+Khả năng tham gia chuỗi cung ứng quốc tế.
+Kế hoạch tài chính liên quan đến Carbon.
+Tuy nhiên, quá trình phân tích báo cáo ESG vẫn tồn tại nhiều khó khăn.
+Thứ nhất, dữ liệu ESG bị phân tán và khó chuẩn hóa
+Một báo cáo ESG có thể chứa:
+Bảng phát thải.
+Phần giải thích bằng văn bản.
+Biểu đồ xu hướng.
+Ghi chú trong phụ lục.
+Nếu chỉ sử dụng OCR truyền thống, hệ thống có thể đọc được chữ nhưng dễ mất cấu trúc hàng, cột và ngữ cảnh của tài liệu.
+Thứ hai, việc phân loại phát thải Carbon dễ bị nhầm lẫn
+Theo GHG Protocol, phát thải được chia thành:
+Scope 1: phát thải trực tiếp.
+Scope 2: phát thải gián tiếp từ năng lượng mua ngoài.
+Scope 3: phát thải gián tiếp trong chuỗi giá trị.
+Trong thực tế, dữ liệu liên quan đến điện năng, nhiên liệu, logistics hoặc vận hành có thể xuất hiện ở nhiều vị trí khác nhau trong báo cáo ESG. Nếu hệ thống không hiểu đúng ngữ cảnh, dữ liệu có thể bị phân loại sai Scope phát thải.
+Thứ ba, kết quả AI thường khó được tin tưởng nếu không truy vết được nguồn dữ liệu
+Nếu hệ thống chỉ đưa ra:
+Một con số phát thải.
+Một cảnh báo ESG.
+Một kết quả phân loại.
+mà không chỉ ra dữ liệu nào dẫn đến kết quả đó thì doanh nghiệp và kiểm toán viên sẽ khó kiểm chứng và khó tin tưởng vào mô hình.
+Vì vậy, hệ thống cần cơ chế lưu vết nguồn dữ liệu cho mỗi kết quả đầu ra, cho phép truy ngược về trang và vị trí cụ thể trong báo cáo gốc để tăng khả năng kiểm chứng.
+Thứ tư, nguy cơ greenwashing ngày càng khó phát hiện
+Một số doanh nghiệp có thể sử dụng ngôn ngữ ESG tích cực như:
+“eco-friendly”
+“sustainable”
+“green operation”
+trong khi dữ liệu thực tế về tiêu thụ năng lượng hoặc phát thải lại không phản ánh điều đó.
+Do đó, hệ thống cần có khả năng so sánh giữa:
+Nội dung truyền thông ESG.
+Dữ liệu phát thải định lượng thực tế.
+nhằm hỗ trợ phát hiện dấu hiệu inconsistency hoặc greenwashing.
+2.1 Tệp người sử dụng
+1. Nhóm người dùng thứ nhất — Ban lãnh đạo doanh nghiệp
+Đây là nhóm sử dụng hệ thống với góc nhìn:
+quản trị
+chiến lược
+vận hành
+compliance
+Họ không quan tâm sâu:
+AI model hoạt động thế nào
+Họ quan tâm:
+doanh nghiệp đang phát thải bao nhiêu
+phát thải đến từ đâu
+ESG có đáng tin không
+rủi ro tương lai là gì
+
+Ban lãnh đạo cần hệ thống để làm gì?
+A. Giám sát tình trạng phát thải của doanh nghiệp
+Lãnh đạo cần biết:
+Scope 1 tăng hay giảm
+tiêu thụ điện đang thế nào
+bộ phận nào phát thải lớn nhất
+hoạt động nào gây Carbon footprint cao
+Ví dụ:
+nhà máy A phát thải cao hơn nhà máy B
+logistics đang tăng mạnh Scope 3
+=> hỗ trợ quản trị vận hành.
+
+B. Theo dõi tiến độ ESG và mục tiêu giảm phát thải
+Nhiều doanh nghiệp có:
+Net Zero target
+sustainability KPI
+carbon reduction roadmap
+Lãnh đạo cần:
+theo dõi tiến độ
+xem doanh nghiệp có đạt mục tiêu ESG không
+Ví dụ:
+giảm 10% energy intensity
+tăng renewable energy usage
+
+C. Hỗ trợ ra quyết định chiến lược
+Ví dụ:
+có nên đầu tư solar?
+có nên thay đổi supplier?
+có nên giảm logistics emission?
+Nếu hệ thống chỉ ra:
+Scope 3 quá lớn
+=> doanh nghiệp có thể:
+tối ưu supply chain
+chọn đối tác phát thải thấp hơn
+
+D. Giảm rủi ro compliance và audit
+Nếu ESG report:
+sai
+thiếu minh bạch
+classify Scope sai
+=> doanh nghiệp có thể:
+bị audit issue
+mất uy tín
+ảnh hưởng investor confidence
+Hệ thống giúp:
+chuẩn hóa dữ liệu
+tăng khả năng kiểm chứng
+
+F. Hỗ trợ quản trị ESG ở quy mô lớn
+Với doanh nghiệp lớn:
+hàng trăm trang ESG report
+nhiều đơn vị thành viên
+nhiều nguồn dữ liệu
+=> xử lý thủ công rất khó.
+AI giúp:
+tự động hóa
+giảm manpower
+tăng tốc phân tích
+
+2. Nhóm người dùng thứ hai — Bên thứ ba / Nhà nước / Cơ quan kiểm tra
+Đây là nhóm cực quan trọng trong tính thực tiễn của đồ án.
+Họ cần:
+xác thực ESG
+kiểm tra tính trung thực
+kiểm tra compliance
+phát hiện greenwashing
+
+Nhà nước hoặc bên kiểm toán cần ESG để làm gì?
+A. Đảm bảo doanh nghiệp báo cáo đúng thực tế
+Nhiều doanh nghiệp:
+công bố ESG rất đẹp
+nhưng dữ liệu thực tế không tương ứng
+Ví dụ:
+report nói:
+“green manufacturing”
+nhưng:
+fuel consumption tăng mạnh
+emission vẫn cao
+=> cần hệ thống hỗ trợ kiểm tra.
+
+B. Đánh giá compliance môi trường
+Cơ quan quản lý cần:
+kiểm tra phát thải
+theo dõi Carbon inventory
+đánh giá sustainability disclosure
+Nếu dữ liệu ESG sai:
+regulator đưa ra quyết định sai
+chính sách môi trường bị ảnh hưởng
+
+D. Hỗ trợ kiểm toán ESG
+Kiểm toán viên cần:
+trace dữ liệu
+biết prediction đến từ đâu
+verify table/sentence nào ảnh hưởng mạnh
+Module 1 hỗ trợ điều này thông qua cơ chế lưu vết nguồn dữ liệu ở mỗi kết quả đầu ra.
+
+Nếu ESG sai lệch sẽ gây ảnh hưởng gì?
+Đây là phần bạn nên nhấn mạnh mạnh trong proposal.
+
+A. Nhà đầu tư bị đánh giá sai rủi ro
+Nếu ESG giả hoặc sai:
+investor tin sai dữ liệu sustainability
+đánh giá sai long-term risk
+
+B. Chính sách môi trường bị sai lệch
+Nếu nhiều doanh nghiệp:
+báo cáo emission thấp hơn thực tế
+=> dữ liệu tổng thể quốc gia sai.
+Điều này ảnh hưởng:
+climate policy
+carbon planning
+
+C. Mất minh bạch thị trường ESG
+Nếu ESG không đáng tin:
+ESG market mất credibility
+sustainability reporting mất ý nghĩa
+
+D. Greenwashing làm sai lệch cạnh tranh
+Doanh nghiệp thật sự đầu tư ESG:
+tốn nhiều chi phí
+Trong khi:
+doanh nghiệp greenwashing chỉ cần “viết đẹp”
+=> cạnh tranh không công bằng.
+
+E. Ảnh hưởng chuỗi cung ứng quốc tế
+Nhiều đối tác quốc tế:
+yêu cầu ESG transparency
+Nếu dữ liệu ESG không đáng tin:
+mất hợp đồng
+mất khả năng tham gia supply chain
+
+3. Nhóm người dùng thứ ba — Nhà đầu tư
+Đây là nhóm cực thực tế.
+Investor hiện không chỉ nhìn:
+revenue
+profit
+mà còn nhìn:
+ESG risk
+sustainability
+carbon exposure
+
+Nhà đầu tư dựa vào ESG để đánh giá cái gì?
+A. Đánh giá rủi ro dài hạn của doanh nghiệp
+Ví dụ:
+doanh nghiệp phát thải quá cao.
+Trong tương lai:
+carbon tax tăng
+regulation tăng
+=> chi phí tăng mạnh.
+Investor cần nhìn thấy:
+sustainability risk.
+
+B. Đánh giá khả năng phát triển bền vững
+Doanh nghiệp:
+energy efficient
+emission thấp
+sustainability tốt
+=> thường:
+ổn định hơn dài hạn
+
+C. Đánh giá mức độ minh bạch
+Nếu ESG:
+rõ ràng
+có thể kiểm chứng
+explainable
+=> tăng trust.
+
+D. Đánh giá quản trị doanh nghiệp
+ESG phản ánh:
+governance quality
+transparency
+risk management
+
+E. Đánh giá rủi ro supply chain
+Ví dụ:
+Scope 3 quá cao.
+=> supply chain:
+phụ thuộc fossil fuel
+emission-heavy
+Investor có thể xem đây là:
+long-term operational risk.
+
+Nếu ESG sai sẽ gây gì cho nhà đầu tư?
+A. Đầu tư sai doanh nghiệp
+Investor nghĩ:
+doanh nghiệp “xanh”
+nhưng thực tế:
+emission rất cao
+=> investment decision sai.
+
+B. Đánh giá sai rủi ro tài chính tương lai
+Ví dụ:
+carbon cost tương lai rất lớn
+nhưng ESG report che giấu
+=> investor underestimate risk.
+
+C. Mất niềm tin thị trường
+Nếu ESG không đáng tin:
+investor giảm trust
+valuation giảm
+
+D. Không hợp tác hoặc rút vốn
+Nhiều quỹ hiện:
+có ESG policy rất mạnh
+Nếu:
+ESG không minh bạch
+có greenwashing
+=> họ có thể:
+không đầu tư
+dừng hợp tác
+loại khỏi ESG portfolio
+
+3. Solution Architecture / Solutions
+Dự án được thiết kế thành 3 module chính, tạo thành một pipeline từ dữ liệu ESG thô đến phân tích và dự báo chiến lược.
+
+
+
+Module 1: Multimodal ESG Report Understanding
+MODULE 1 — MULTIMODAL ESG REPORT UNDERSTANDING
+Mục tiêu Module 1
+Module 1 có nhiệm vụ:
+Đọc ESG Report → hiểu cấu trúc tài liệu → trích xuất dữ liệu carbon → phân loại Scope 1/2/3 → chuẩn hóa dữ liệu
+
+Output cuối:
+{
+  "scope": "Scope 2",
+  "value": 15234,
+  "unit": "tCO2e",
+  "source_page": 48
+}
+
+
+LUỒNG CHÍNH MODULE 1
+[1] OCR
+        ↓
+[2] Layout Understanding
+        ↓
+[3] Table Classification / Table Understanding
+        ↓
+[4] Semantic Mapping (Scope Mapping)
+        ↓
+[5] RAG Standards Retrieval
+        ↓
+[6] Structured ESG Output
+
+
+MỐC 1 — OCR (TEXT EXTRACTION)
+Vai trò
+Chuyển:
+PDF / Scan / Image
+↓
+Machine-readable text
+
+Ví dụ:
+Ảnh PDF:
+Scope 1 emissions: 12,441 tCO2e
+
+↓
+Text:
+"Scope 1 emissions: 12,441 tCO2e"
+
+
+Vấn đề thực tế cần giải quyết
+
+Các mô hình OCR mạnh có thể sử dụng
+
+Cách hoạt động của OCR AI
+OCR hiện đại gồm 2 bước:
+
+Bước 1 — Text Detection
+Model tìm:
+vùng nào chứa chữ
+
+Ví dụ:
+[ Scope 1 emissions ]
+
+được detect thành bounding box.
+Model thường dùng:
+DBNet
+CRAFT
+EAST
+
+Bước 2 — Text Recognition
+Sau khi crop vùng chữ:
+Transformer/CNN đọc ký tự.
+Ví dụ:
+"12,441 tCO2e"
+
+↓
+machine-readable string
+
+
+Model được chọn mạnh nhất
+PaddleOCR
+Lý do chọn
+
+Tại sao không chọn model khác?
+
+MỐC 2 — LAYOUT UNDERSTANDING
+Vai trò
+Hiểu cấu trúc tài liệu ESG.
+Model phải biết:
+Đâu là:
+- tiêu đề
+- bảng
+- đoạn văn
+- footer
+- ESG metrics block
+- biểu đồ
+
+
+Vấn đề thực tế
+ESG report thường:
+
+Các mô hình Layout mạnh
+
+LayoutLMv3 hoạt động như thế nào?
+LayoutLMv3 học đồng thời:
+
+Ví dụ
+Model thấy:
+Scope 2 emissions
+
+ở giữa bảng ESG.
+Model hiểu:
+đây là ESG metric
+
+không phải footer.
+
+Output
+{
+  "type": "table",
+  "bbox": [x1,y1,x2,y2]
+}
+
+
+Model được chọn mạnh nhất
+LayoutLMv3
+Lý do chọn
+
+Tại sao không chọn model khác?
+
+MỐC 3 — TABLE CLASSIFICATION / TABLE UNDERSTANDING
+Vai trò
+Hiểu bảng ESG.
+Ví dụ:
+Model phải hiểu:
+12,441 thuộc Scope 1
+
+
+Vấn đề thực tế
+
+Các model mạnh cho Table Understanding
+
+Cách hoạt động của Table Transformer
+Transformer detect:
+
+Ví dụ
+Model hiểu:
+12,441
+
+thuộc:
+Scope 1
+
+do cùng row.
+
+Output
+{
+  "scope": "Scope 1",
+  "value": 12441
+}
+
+
+Model được chọn mạnh nhất
+Microsoft Table Transformer
+Lý do chọn
+
+Tại sao không chọn model khác?
+
+MỐC 4 — SEMANTIC MAPPING (SCOPE 1/2/3)
+Vai trò
+Ánh xạ dữ liệu emission vào:
+Scope 1
+Scope 2
+Scope 3
+
+
+Vì sao khó?
+Do doanh nghiệp không ghi rõ.
+Ví dụ:
+Purchased electricity emissions
+
+thực chất là:
+Scope 2
+
+
+Bài toán AI thực tế
+Đây là:
+Semantic Classification
+
+không còn là OCR nữa.
+Model phải hiểu ngữ nghĩa ESG.
+
+Các mô hình NLP mạnh
+
+ClimateBERT hoạt động như thế nào?
+ClimateBERT là:
+BERT pretrained trên dữ liệu climate/ESG
+
+Nó học:
+carbon emission
+sustainability
+renewable energy
+supply chain emission
+net zero
+
+Cách classifier hoạt động
+Input:
+“Indirect emissions from purchased electricity”
+
+↓
+Transformer encoding
+↓
+Context understanding
+↓
+Classification head
+↓
+Scope 2
+
+
+Output
+{
+  "scope": "Scope 2",
+  "confidence": 0.95
+}
+
+
+Model được chọn mạnh nhất
+ClimateBERT Fine-tuned
+Lý do chọn
+
+Tại sao không chọn model khác?
+
+MỐC 5 — RAG STANDARDS RETRIEVAL
+Vai trò
+Đối chiếu với:
+GRI Standards
+GHG Protocol
+Climate standards
+để tăng độ chính xác semantic.
+
+Mục tiêu
+Ví dụ:
+Purchased electricity emission
+
+RAG retrieve:
+GHG Protocol:
+Purchased electricity belongs to Scope 2
+
+giúp classifier chính xác hơn.
+
+Đây là gì?
+Không phải model classification.
+Đây là:
+Retriever + Knowledge Augmentation
+
+
+Các mô hình Retriever mạnh
+
+RAG hoạt động như thế nào?
+Bước 1
+Convert standard documents thành embedding.
+Ví dụ:
+GHG Protocol PDF
+
+↓
+Vector database.
+
+Bước 2
+User query:
+Purchased electricity emissions
+
+↓
+Embedding search.
+
+Bước 3
+Retrieve đoạn liên quan nhất:
+Indirect emissions from purchased electricity are Scope 2 emissions.
+
+
+Output
+{
+  "retrieved_context": "...Scope 2..."
+}
+
+
+Model được chọn mạnh nhất
+BGE-large
+Lý do chọn
+
+Tại sao không chọn model khác?
+
+OUTPUT CUỐI MODULE 1
+{
+  "company": "ABC Corp",
+  "year": 2025,
+  "scope": "Scope 2",
+  "emission_value": 15234,
+  "unit": "tCO2e",
+  "source_page": 48,
+  "retrieved_standard": "GHG Protocol Scope 2"
+}
+
+
+KIẾN TRÚC CUỐI CÙNG ĐỀ XUẤT CHO MODULE 1
+PDF ESG Report
+        ↓
+PaddleOCR
+        ↓
+LayoutLMv3
+        ↓
+Microsoft Table Transformer
+        ↓
+ClimateBERT Scope Mapping
+        ↓
+BGE-large RAG Retrieval
+        ↓
+Structured ESG Data
+
+
+TỔNG HỢP MODEL TỐT NHẤT CHO TỪNG MỐC
+
+
+4. Data Strategy
+Phần: Đánh giá và Lựa chọn Tập dữ liệu (Dataset Selection)
+Trong quá trình xây dựng hệ thống phân tích báo cáo ESG và định lượng phát thải Carbon, việc xác định chiến lược dữ liệu đóng vai trò quyết định đối với độ chính xác và tính khả thi của mô hình. Dựa trên yêu cầu thực tế của đồ án, hai nhóm dữ liệu chính đã được đưa ra phân tích và đối chiếu:
+1. Tập dữ liệu quốc tế (Mỹ - SEC EDGAR / Kaggle) Theo các thiết kế hệ thống thông thường, nguồn dữ liệu hồ sơ điện tử và báo cáo thường niên thường được trích xuất từ hệ thống SEC EDGAR của Mỹ.
+Ưu điểm: Đây là kho dữ liệu khổng lồ, bao gồm các hồ sơ điện tử được lưu trữ từ năm 2001, cung cấp rất đa dạng các báo cáo liên quan đến ESG, rủi ro khí hậu và phụ lục tài chính năng lượng.
+Nhược điểm: Kích thước dữ liệu lên tới hàng triệu báo cáo gây ra rào cản lớn về tài nguyên tính toán (compute) trong quá trình huấn luyện mô hình. Quan trọng hơn, nội dung của tập dữ liệu này tập trung chủ yếu vào bối cảnh tài chính quốc tế, ít có sự liên quan đến môi trường pháp lý và đặc thù vận hành của các doanh nghiệp tại Việt Nam.
+2. Tập dữ liệu doanh nghiệp Việt Nam (Báo cáo phát triển bền vững) (Thông tin này được đúc kết từ bối cảnh thực tế của đồ án) Đề xuất thay thế là sử dụng tập dữ liệu nội địa, bao gồm khoảng 300+ báo cáo phát triển bền vững được thu thập từ các doanh nghiệp Việt Nam (ví dụ: Báo cáo ESG Thế Kỷ 2022, dữ liệu từ sustainabilityreports.com).
+Ưu điểm: Tính liên quan thực tiễn rất cao. Nguồn dữ liệu này bám sát bối cảnh pháp lý địa phương (như Nghị định 06/2022/NĐ-CP về giảm phát thải khí nhà kính). Dữ liệu chứa các thông tin cụ thể để mô hình trích xuất mức phát thải trực tiếp (Scope 1), gián tiếp (Scope 2, Scope 3), cũng như văn bản về tài chính ESG. Kích thước tập dữ liệu vừa vặn để tinh chỉnh (fine-tune) các mô hình như LayoutLMv3 hay RAG mà không gây quá tải hệ thống.
+Nhược điểm: Thiếu tính tập trung, đòi hỏi công sức thu thập (crawl) từ nhiều nguồn khác nhau. Lượng dữ liệu nhỏ gọn cũng tiềm ẩn nguy cơ thiên kiến (bias), khiến mô hình có thể gặp khó khăn khi đối mặt với các thủ thuật "tẩy xanh" (greenwashing) ngôn từ tinh vi nếu không được bổ sung dữ liệu đa dạng.
+3. Quyết định lựa chọn và Chiến lược dữ liệu tổng thể Dựa trên sự cân nhắc về tính thực tế và nguồn lực, tập dữ liệu Báo cáo phát triển bền vững của doanh nghiệp Việt Nam được lựa chọn làm nguồn huấn luyện chính cho hệ thống. Quá trình huấn luyện sẽ được chia theo tỷ lệ 80/20 (train/test), trong đó các báo cáo (định dạng PDF đa phương thức gồm văn bản, bảng biểu, layout) sẽ được tiền xử lý qua OCR và LayoutLMv3 để giữ nguyên vẹn cấu trúc thông tin.
+Để khắc phục hạn chế về quy mô của tập dữ liệu Việt Nam, dự án áp dụng chiến lược kết hợp đa nguồn:
+Tăng cường dữ liệu (Data Augmentation) bằng NLP Dataset: Sử dụng bổ sung các tập dữ liệu NLP về ESG trên nền tảng Hugging Face. Các tập dữ liệu này cung cấp thêm kiến thức phong phú về ngôn ngữ phân loại khí hậu (climate-related text classification), phân tích sắc thái tài chính (financial sentiment) và phát hiện "tẩy xanh" (greenwashing detection), giúp mô hình tránh bị thiên kiến nội địa.
+Tham chiếu chuẩn mực toàn cầu: Dù sử dụng báo cáo Việt Nam, module RAG của hệ thống vẫn sẽ được kết nối cố định với kho tri thức của GHG Protocol và GRI Standards. Điều này đảm bảo việc định lượng và gán nhãn các nguồn phát thải vào đúng phân loại Scope 1, 2 và 3 luôn tuân thủ nghiêm ngặt theo các chuẩn mực báo cáo bền vững toàn cầu.
+Dữ liệu pháp lý: Tích hợp thêm các bộ dữ liệu về luật khí hậu và chính sách môi trường (như Climate Change Laws of the World) để hệ thống có bối cảnh đánh giá sâu hơn về quy định phát thải và cơ chế thị trường Carbon
+
+
+5. Implementation Plan
+
+
+6. Expected Outcomes
+Sau khi hoàn thành, dự án kỳ vọng tạo ra:
+Một hệ thống AI hỗ trợ tự động phân tích báo cáo ESG.
+Bộ dữ liệu ESG đã được trích xuất và chuẩn hóa.
+Mô hình phân loại dữ liệu phát thải theo Scope 1, Scope 2 và Scope 3.
+Một prototype hỗ trợ doanh nghiệp và kiểm toán viên giảm khối lượng xử lý ESG thủ công và tăng khả năng kiểm chứng dữ liệu Carbon.
+
+
+--- TABLE ---
+Vấn đề | Mô tả
+Scan PDF mờ | OCR khó đọc
+Multi-column | Đọc sai thứ tự
+Font nhỏ | Sai ký tự
+ESG tables | Bảng phức tạp
+Mixed content | Text + table + icon
+
+--- TABLE ---
+Model | Kiến trúc | Ưu điểm | Nhược điểm | Phù hợp ESG
+Tesseract OCR | Traditional OCR | Nhẹ, miễn phí | Accuracy thấp | Trung bình
+EasyOCR | CNN + RNN | Dễ dùng | Table yếu | Trung bình
+PaddleOCR | Detection + Recognition Transformer | OCR mạnh, hỗ trợ table | Setup lớn | Rất cao
+TrOCR | Vision Transformer | Accuracy rất cao | GPU nặng | Cao
+AWS Textract | Cloud OCR AI | Parse document mạnh | Trả phí | Rất cao
+Google Document AI | Document AI | Hiểu document tốt | Cost cao | Rất cao
+Azure Form Recognizer | Transformer | Structured extraction tốt | Cloud dependency | Cao
+
+--- TABLE ---
+Tiêu chí | Lý do
+ESG tables | Đọc bảng mạnh
+Open-source | Dễ triển khai
+Accuracy | Cao
+Multi-language | Tốt
+Scan PDF | Ổn định
+Pipeline integration | Dễ nối với LayoutLMv3
+
+--- TABLE ---
+Model | Lý do không ưu tiên
+Tesseract | Quá yếu với ESG complex layout
+EasyOCR | Không tốt với bảng
+TrOCR | Accuracy cao nhưng compute quá nặng
+Textract | Production tốt nhưng phụ thuộc cloud
+Google Document AI | Cost lớn
+
+--- TABLE ---
+Đặc điểm | Khó khăn
+2 cột | OCR đọc sai thứ tự
+Table lồng nhau | Khó parse
+Header/Footer | Lẫn dữ liệu
+Chart + Text | Semantic ambiguity
+Layout khác nhau | Generalization khó
+
+--- TABLE ---
+Model | Kiến trúc | Ưu điểm | Nhược điểm | Độ phù hợp
+LayoutLMv3 | Multimodal Transformer | Hiểu text + image + layout | GPU lớn | Rất cao
+LayoutLMv2 | Document Transformer | Nhẹ hơn v3 | Visual yếu hơn | Cao
+DocFormer | Transformer | Semantic document tốt | Community nhỏ | Trung bình
+Donut | OCR-free Transformer | End-to-end | Fine-tune khó | Cao
+DiT | Vision Transformer | Visual mạnh | Không mạnh semantic text | Cao
+Detectron2 + PubLayNet | Object Detection | Detect layout tốt | Không hiểu text | Trung bình
+YOLO Document Layout | Detection | Nhanh | Semantic yếu | Trung bình
+
+--- TABLE ---
+Thành phần | Ý nghĩa
+Text embedding | Nội dung
+Position embedding | Vị trí trên trang
+Image embedding | Hình ảnh tài liệu
+
+--- TABLE ---
+Tiêu chí | Lý do
+ESG document understanding | Rất mạnh
+Multi-modal | Có
+Table-aware | Có
+Semantic layout | Rất tốt
+Academic value | Cao
+SOTA document AI | Có
+
+--- TABLE ---
+Model | Lý do
+Detectron2 | Chỉ detect object
+YOLO | Không hiểu semantic
+LayoutLMv2 | Yếu hơn v3
+Donut | Fine-tune khó và unstable
+
+--- TABLE ---
+Scope | Emission
+Scope 1 | 12,441
+Scope 2 | 5,221
+
+--- TABLE ---
+Problem | Hệ quả
+Merge cell | Sai mapping
+Multi-row header | Sai column
+Nested table | Parse lỗi
+OCR lệch dòng | Scope sai
+Unit khác cột | Mapping sai
+
+--- TABLE ---
+Model | Kiến trúc | Ưu điểm | Nhược điểm | Độ phù hợp
+Table Transformer (TATR) | Transformer | Hiểu row/column rất mạnh | GPU cao | Rất cao
+Microsoft Table Transformer | DETR-based | Semantic table extraction | Chậm | Rất cao
+CascadeTabNet | CNN Detection | Detect table tốt | Semantic yếu | Cao
+DeepDeSRT | CNN + RNN | Structure parsing tốt | Khó train | Trung bình
+Camelot | Rule-based | Tốt PDF text-based | Scan PDF yếu | Trung bình
+Tabula | Rule-based | Dễ dùng | Accuracy thấp | Thấp
+PaddleOCR Table | OCR-integrated | Pipeline đơn giản | Semantic chưa mạnh | Cao
+
+--- TABLE ---
+Thành phần | Ý nghĩa
+Row | Hàng
+Column | Cột
+Cell | Ô
+Header | Tiêu đề
+Cell relation | Quan hệ dữ liệu
+
+--- TABLE ---
+Tiêu chí | Lý do
+Complex ESG table | Rất mạnh
+Merge-cell handling | Tốt
+Row-column relation | Tốt
+Semantic table parsing | Rất mạnh
+Research quality | Cao
+
+--- TABLE ---
+Model | Lý do
+Camelot | Không tốt scan PDF
+Tabula | Rule-based quá yếu
+CascadeTabNet | Chỉ detect table
+PaddleOCR Table | Chưa mạnh semantic relation
+
+--- TABLE ---
+Model | Kiến trúc | Ưu điểm | Nhược điểm | Độ phù hợp
+BERT | Transformer Encoder | NLP mạnh | Không ESG-specific | Cao
+RoBERTa | Improved BERT | Accuracy cao | Domain ESG chưa mạnh | Cao
+DeBERTa-v3 | Advanced Transformer | Context cực mạnh | GPU lớn | Rất cao
+FinBERT | Financial NLP | Hiểu finance | ESG chưa đủ mạnh | Cao
+SciBERT | Scientific NLP | Tốt technical text | Không climate-focused | Cao
+ClimateBERT | Climate-domain Transformer | Hiểu ESG/climate rất mạnh | Dataset nhỏ | Rất cao
+DistilBERT | Lightweight Transformer | Nhanh | Accuracy thấp hơn | Trung bình
+SVM + TF-IDF | Traditional ML | Dễ train | Không semantic | Thấp
+
+--- TABLE ---
+Tiêu chí | Lý do
+ESG semantic understanding | Rất mạnh
+Climate terminology | Có
+Scope mapping | Tốt
+ESG context | Tốt
+Academic novelty | Cao
+
+--- TABLE ---
+Model | Lý do
+SVM | Không hiểu semantic
+FinBERT | Financial-focused
+SciBERT | Scientific nhưng không ESG-specific
+DistilBERT | Accuracy thấp hơn
+
+--- TABLE ---
+Model | Kiến trúc | Ưu điểm | Nhược điểm | Độ phù hợp
+BM25 | Sparse Retrieval | Nhanh | Không semantic | Trung bình
+Sentence-BERT | Dense Retrieval | Semantic tốt | Không domain-specific | Cao
+Contriever | Self-supervised Dense Retrieval | General mạnh | Không ESG-specific | Cao
+DPR | Dense Passage Retrieval | QA retrieval mạnh | Fine-tune khó | Cao
+BGE-large | Embedding model | Embedding rất mạnh | GPU lớn | Rất cao
+E5-large | Instruction embedding | Semantic retrieval mạnh | Compute lớn | Rất cao
+OpenAI Embedding | API embedding | Accuracy cao | Phụ thuộc API | Cao
+
+--- TABLE ---
+Tiêu chí | Lý do
+Semantic retrieval | Rất mạnh
+Long document retrieval | Tốt
+ESG standard retrieval | Tốt
+Embedding quality | Cao
+Research quality | Cao
+
+--- TABLE ---
+Model | Lý do
+BM25 | Keyword-based
+Sentence-BERT | Embedding yếu hơn
+DPR | Fine-tune phức tạp
+API embedding | Phụ thuộc external API
+
+--- TABLE ---
+Mốc | Model mạnh nhất | Vai trò
+OCR | PaddleOCR | Trích xuất text
+Layout Understanding | LayoutLMv3 | Hiểu bố cục ESG
+Table Understanding | Microsoft Table Transformer | Parse bảng ESG
+Semantic Mapping | ClimateBERT | Scope classification
+RAG Retrieval | BGE-large | Retrieve GHG/GRI standards
