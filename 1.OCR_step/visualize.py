@@ -14,8 +14,8 @@ Cach dung:
 
 python visualize_merge.py ^
     --root "valid" ^
-    --merged_json "valid/layoutlmv3_dataset.json" ^
-    --out_dir "valid/debug_vis" ^
+    --merged_json "valid/0_layoutlmv3_dataset.json" ^
+    --out_dir "valid/0_debug_vis" ^
     --max_images 50
 """
 

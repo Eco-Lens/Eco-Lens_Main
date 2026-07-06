@@ -1,7 +1,7 @@
 r"""
 merge_ocr_with_regions.py
 Merge OCR word-level (tu run_paddleocr_wordlevel.py) voi annotation vung
-(_annotations.coco.json tu Roboflow) de tao du lieu token classification
+(0_annotations.coco.json tu Roboflow) de tao du lieu token classification
 cho LayoutLMv3: moi tu (word) duoc gan 1 label = ten vung ma no nam trong.
 
 Quy tac gan nhan:
@@ -14,8 +14,8 @@ Quy tac gan nhan:
 Cach dung:
     python merge_ocr_with_regions.py \
         --root "valid" \
-        --ocr_json "valid/ocr_words.json" \
-        --out_json "valid/layoutlmv3_dataset.json"
+        --ocr_json "valid/0_ocr_words.json" \
+        --out_json "valid/0_layoutlmv3_dataset.json"
 """
 import argparse
 import json
@@ -57,7 +57,7 @@ def assign_label(word_bbox, region_boxes, default_label="O"):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", required=True)
-    ap.add_argument("--json_name", default="_annotations.coco.json")
+    ap.add_argument("--json_name", default="0_annotations.coco.json")
     ap.add_argument("--ocr_json", required=True)
     ap.add_argument("--out_json", required=True)
     ap.add_argument("--default_label", default="O")

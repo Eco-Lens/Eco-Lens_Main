@@ -1,6 +1,6 @@
 r"""
 run_paddleocr_wordlevel.py
-Chay PaddleOCR tren dung tap anh da label vung (theo _annotations.coco.json),
+Chay PaddleOCR tren dung tap anh da label vung (theo 0_annotations.coco.json),
 lay ra text + bbox cho TUNG TU (khong phai tung vung), de sau nay merge voi
 annotation vung tao label cho LayoutLMv3 token classification.
 
@@ -14,7 +14,7 @@ Cai dat:
 Cach dung:
     # OCR truc tiep tren anh tu Roboflow (valid/) de dam bao cung he toa do voi annotation
     python run_paddleocr_wordlevel.py --root "valid" \
-        --out_json "valid/ocr_words.json"
+        --out_json "valid/0_ocr_words.json"
 """
 
 import argparse
@@ -48,8 +48,8 @@ def save_state(state_path, state):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--root", required=True, help="Thu muc chua anh + _annotations.coco.json")
-    ap.add_argument("--json_name", default="_annotations.coco.json")
+    ap.add_argument("--root", required=True, help="Thu muc chua anh + 0_annotations.coco.json")
+    ap.add_argument("--json_name", default="0_annotations.coco.json")
     ap.add_argument("--out_json", required=True, help="File json ket qua OCR word-level")
     ap.add_argument("--lang", default="en")
     args = ap.parse_args()

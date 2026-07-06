@@ -26,7 +26,7 @@ import os
 from PIL import Image
 
 
-def check_coco_vs_actual_files(root, json_name="_annotations.coco.json"):
+def check_coco_vs_actual_files(root, json_name="0_annotations.coco.json"):
     print("=== BUOC 1: Kich thuoc khai bao trong COCO json vs file anh thuc te ===")
     json_path = os.path.join(root, json_name)
     with open(json_path, "r", encoding="utf-8") as f:
@@ -118,7 +118,7 @@ def check_vs_ocr_source(coco, roboflow_root, ocr_source_root):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--roboflow_root", required=True, help="Thu muc chua anh + json tu Roboflow")
-    ap.add_argument("--json_name", default="_annotations.coco.json")
+    ap.add_argument("--json_name", default="0_annotations.coco.json")
     ap.add_argument("--ocr_source_root", default=None,
                      help="(Tuy chon) thu muc chua anh goc dung de OCR, de doi chieu")
     args = ap.parse_args()

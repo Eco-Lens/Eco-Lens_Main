@@ -3,8 +3,9 @@
 # Image files
 /DatasetIMG/*
 /DatasetIMG_Reduce/*
-/valid/*
+
 # OCR files
 /DatasetOCR/*
 #Documentation
 /Eco-Lens_Main/Eco-Lens_docx/*
+/valid/*

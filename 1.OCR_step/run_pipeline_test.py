@@ -68,8 +68,8 @@ def assign_label(word_bbox, region_boxes, default_label="O"):
 
 def main():
     ap = argparse.ArgumentParser(description="Test OCR pipeline on a small sample")
-    ap.add_argument("--root", default="valid", help="Thu muc chua anh + _annotations.coco.json")
-    ap.add_argument("--json_name", default="_annotations.coco.json")
+    ap.add_argument("--root", default="valid", help="Thu muc chua anh + 0_annotations.coco.json")
+    ap.add_argument("--json_name", default="0_annotations.coco.json")
     ap.add_argument("--max_images", type=int, default=10, help="So anh thu (mac dinh 10)")
     ap.add_argument("--out_prefix", default="test", help="Tien to cho file output")
     ap.add_argument("--seed", type=int, default=42, help="Random seed de tai lap")
@@ -78,9 +78,9 @@ def main():
 
     random.seed(args.seed)
     root = args.root
-    out_ocr = os.path.join(root, f"{args.out_prefix}_ocr_words.json")
-    out_merged = os.path.join(root, f"{args.out_prefix}_layoutlmv3_dataset.json")
-    out_vis = os.path.join(root, f"{args.out_prefix}_debug_vis")
+    out_ocr = os.path.join(root, f"{args.out_prefix}_0_ocr_words.json")
+    out_merged = os.path.join(root, f"{args.out_prefix}_0_layoutlmv3_dataset.json")
+    out_vis = os.path.join(root, f"{args.out_prefix}_0_debug_vis")
 
     # --- DOC COCO JSON ---
     coco_path = os.path.join(root, args.json_name)
@@ -221,9 +221,9 @@ def main():
     print(f"  Debug images:{out_vis}/")
     print(f"\nKiem tra debug images truoc khi chay pipeline full.")
     print(f"De chay full dataset, dung cac lenh rieng:")
-    print(f"  python 1.OCR_step/run_paddleocr_wordlevel.py --root \"{root}\" --out_json \"{root}/ocr_words.json\"")
-    print(f"  python 1.OCR_step/merge_json.py --root \"{root}\" --ocr_json \"{root}/ocr_words.json\" --out_json \"{root}/layoutlmv3_dataset.json\"")
-    print(f"  python 1.OCR_step/visualize.py --root \"{root}\" --merged_json \"{root}/layoutlmv3_dataset.json\" --out_dir \"{root}/debug_vis\"")
+    print(f"  python 1.OCR_step/run_paddleocr_wordlevel.py --root \"{root}\" --out_json \"{root}/0_ocr_words.json\"")
+    print(f"  python 1.OCR_step/merge_json.py --root \"{root}\" --ocr_json \"{root}/0_ocr_words.json\" --out_json \"{root}/0_layoutlmv3_dataset.json\"")
+    print(f"  python 1.OCR_step/visualize.py --root \"{root}\" --merged_json \"{root}/0_layoutlmv3_dataset.json\" --out_dir \"{root}/0_debug_vis\"")
 
 
 if __name__ == "__main__":
