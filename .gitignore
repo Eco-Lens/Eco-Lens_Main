@@ -3,13 +3,9 @@
 # Image files
 /DatasetIMG/*
 /DatasetIMG_Reduce/*
-
-# OCR files
-/DatasetOCR/*
+/valid/*
 #Documentation
 /Eco-Lens_Main/Eco-Lens_docx/*
-/valid/*
-
 
 __pycache__/
 *.pyc
