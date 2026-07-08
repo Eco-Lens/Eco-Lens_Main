@@ -6,6 +6,7 @@
 /valid/*
 #Documentation
 /Eco-Lens_Main/Eco-Lens_docx/*
-
 __pycache__/
 *.pyc
+#Output
+/Output/0_debug_vis/*
