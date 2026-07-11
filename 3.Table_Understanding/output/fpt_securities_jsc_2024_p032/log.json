@@ -1,0 +1,37 @@
+{
+  "page": "fpt_securities_jsc_2024_p032",
+  "n_table_tokens": 17,
+  "n_regions": 1,
+  "regions": [
+    {
+      "table_id": "table_00",
+      "bbox": [
+        3240.0,
+        1098.0,
+        4475.0,
+        1494.0
+      ],
+      "crop_size": [
+        1275.0,
+        436.0
+      ],
+      "ocr_words_inside": 12,
+      "tatr_cells": 4,
+      "output_shape": [
+        1,
+        2
+      ]
+    }
+  ],
+  "skipped": [
+    {
+      "reason": "no_numeric_content",
+      "bbox": [
+        2510.0,
+        1108.0,
+        3076.0,
+        1509.0
+      ]
+    }
+  ]
+}

@@ -1,0 +1,63 @@
+[
+  {
+    "page": "fpt_securities_jsc_2024_p026",
+    "table_id": "table_00",
+    "bbox": [
+      1383.0,
+      365.0,
+      1599.0,
+      1208.0
+    ],
+    "crop_bbox": [
+      1363.0,
+      345.0,
+      1619.0,
+      1228.0
+    ],
+    "source_label": "table",
+    "table_data": [
+      [
+        "",
+        "Year 2023 505 268 237 479 9"
+      ]
+    ],
+    "rows": 1,
+    "cols": 2,
+    "extracted_metrics": [],
+    "is_esg": false,
+    "tatr_cells": 5,
+    "tatr_time": 1.15,
+    "tokens_in_crop": 6
+  },
+  {
+    "page": "fpt_securities_jsc_2024_p026",
+    "table_id": "table_01",
+    "bbox": [
+      1879.0,
+      261.0,
+      2228.0,
+      1210.0
+    ],
+    "crop_bbox": [
+      1859.0,
+      241.0,
+      2248.0,
+      1230.0
+    ],
+    "source_label": "table",
+    "table_data": [
+      [
+        "",
+        "",
+        "Year 2024 458 Unit: Person 431 233 225 12 15"
+      ]
+    ],
+    "rows": 1,
+    "cols": 3,
+    "extracted_metrics": [],
+    "is_esg": false,
+    "tatr_cells": 7,
+    "tatr_time": 0.83,
+    "tokens_in_crop": 8
+  }
+]

@@ -1,0 +1,32 @@
+[
+  {
+    "page": "fpt_securities_jsc_2024_p028",
+    "table_id": "table_00",
+    "bbox": [
+      154.0,
+      672.0,
+      2213.0,
+      1158.0
+    ],
+    "crop_bbox": [
+      134.0,
+      652.0,
+      2233.0,
+      1178.0
+    ],
+    "source_label": "table",
+    "table_data": [
+      [
+        "tax Realized profit before. Revenue Item (Billion VND) Result in 1,006.07 512.67 2024 (Billion VND) Plan in 845.00 420.00 2024",
+        "(Billion VND) Result in 510.04 921.37 2023 Plan in 2024 Result vs 119.06% 122.07% (%) 2024 vs Re- sult in 2023 Result in 109.19% 100.52% (%)"
+      ]
+    ],
+    "rows": 1,
+    "cols": 2,
+    "extracted_metrics": [],
+    "is_esg": false,
+    "tatr_cells": 5,
+    "tatr_time": 1.45,
+    "tokens_in_crop": 30
+  }
+]

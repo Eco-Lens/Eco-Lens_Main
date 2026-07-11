@@ -1,0 +1,76 @@
+{
+  "page": "fpt_securities_jsc_2024_p025",
+  "n_table_tokens": 84,
+  "n_regions": 4,
+  "regions": [
+    {
+      "table_id": "table_00",
+      "bbox": [
+        149.0,
+        301.0,
+        2972.0,
+        1188.0
+      ],
+      "crop_size": [
+        2863.0,
+        927.0
+      ],
+      "ocr_words_inside": 31,
+      "tatr_cells": 20,
+      "output_shape": [
+        13,
+        5
+      ]
+    },
+    {
+      "table_id": "table_01",
+      "bbox": [
+        3473.0,
+        301.0,
+        4515.0,
+        451.0
+      ],
+      "crop_size": [
+        1082.0,
+        190.0
+      ],
+      "ocr_words_inside": 8,
+      "tatr_cells": 6,
+      "output_shape": [
+        3,
+        2
+      ]
+    },
+    {
+      "table_id": "table_03",
+      "bbox": [
+        1050.0,
+        1915.0,
+        2173.0,
+        3032.0
+      ],
+      "crop_size": [
+        1163.0,
+        1157.0
+      ],
+      "ocr_words_inside": 32,
+      "tatr_cells": 14,
+      "output_shape": [
+        9,
+        4
+      ]
+    }
+  ],
+  "skipped": [
+    {
+      "reason": "processing_failed",
+      "detail": "no_numeric_after_tatr_grid",
+      "bbox": [
+        129.0,
+        1895.0,
+        943.0,
+        3047.0
+      ]
+    }
+  ]
+}
