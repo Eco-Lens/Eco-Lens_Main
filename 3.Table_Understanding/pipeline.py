@@ -11,6 +11,305 @@ from utils import (
 )
 from tatr_engine import TATREngine
 
+import re
+
+INVALID_METRICS = {
+    "",
+    "item",
+    "items",
+    "unit",
+    "units",
+    "%",
+    "times",
+    "description",
+    "year",
+    "years",
+    "no",
+    "no.",
+}
+
+SECTION_WORDS = {
+    "assets",
+    "liabilities",
+    "equity",
+    "capital",
+    "owner",
+    "shareholders",
+    "balance sheet",
+    "cash flow",
+    "income statement",
+}
+
+METRIC_KEYWORDS = {
+
+    "metric",
+    "indicator",
+    "description",
+    "item",
+    "particular",
+    "particulars",
+    "category",
+    "parameter",
+    "measure",
+    "kpi",
+}
+
+UNIT_KEYWORDS = {
+
+    "unit",
+    "units",
+    "uom",
+}
+TOTAL_WORDS = {
+    "total",
+    "subtotal",
+    "grand total",
+}
+
+INVALID_METRICS = {
+    "",
+    "item",
+    "items",
+    "unit",
+    "units",
+    "%",
+    "times",
+    "description",
+    "year",
+    "years",
+    "no",
+    "no.",
+}
+
+HEADER_KEYWORDS = {
+    "metric",
+    "indicator",
+    "description",
+    "item",
+    "note",
+    "notes",
+    "unit",
+    "year",
+    "scope",
+    "category",
+    "kpi",
+} 
+
+def normalize_text(text: str):
+    if not text:
+        return ""
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def is_number(text):
+    if text is None:
+        return False
+
+    text = str(text).strip()
+
+    if text == "":
+        return False
+
+    text = text.replace(",", "")
+
+    try:
+        float(text)
+        return True
+    except:
+        return False
+    
+def is_heading(metric):
+
+    metric = normalize_text(metric)
+
+    if not metric:
+        return False
+
+    lower = metric.lower()
+
+    if any(k in lower for k in SECTION_WORDS):
+        return True
+
+    letters = [c for c in metric if c.isalpha()]
+
+    if letters:
+
+        ratio = sum(c.isupper() for c in letters) / len(letters)
+
+        if ratio > 0.8:
+            return True
+
+    return False
+
+def extract_year(text):
+
+    if text is None:
+        return None
+
+    m = re.search(r"(19|20)\d{2}", str(text))
+
+    if m:
+        return int(m.group())
+
+    return None
+
+import re
+
+def is_total(metric):
+
+    metric = metric.lower()
+
+    return any(k in metric for k in TOTAL_WORDS)
+
+def normalize_text(text: str):
+    if not text:
+        return ""
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+def clean_metric(metric):
+
+    metric = normalize_text(metric)
+
+    metric = metric.replace("\n"," ")
+
+    metric = re.sub(r"\s+"," ",metric)
+
+    return metric.strip()
+
+def is_number(text):
+    if text is None:
+        return False
+
+    text = str(text).strip()
+
+    if text == "":
+        return False
+
+    text = text.replace(",", "")
+
+    try:
+        float(text)
+        return True
+    except:
+        return False
+
+
+def extract_year(text):
+
+    if text is None:
+        return None
+
+    m = re.search(r"(19|20)\d{2}", str(text))
+
+    if m:
+        return int(m.group())
+
+    return None
+
+def detect_header_row(table_grid):
+
+    best_row = 0
+    best_score = -1
+
+    for ri, row in enumerate(table_grid):
+
+        score = 0
+        non_empty = [c for c in row if normalize_text(c)]
+
+        if len(non_empty) <= 1:
+            continue
+        for cell in row:
+            cell = normalize_text(cell).lower()
+            header_hits = 0
+            if extract_year(cell):
+
+                header_hits += 1
+
+            elif any(k in cell for k in HEADER_KEYWORDS):
+
+                header_hits += 1
+            score += header_hits * 3
+            if not cell:
+                continue
+
+            lower = cell.lower()
+
+            # keyword
+            if any(k in lower for k in HEADER_KEYWORDS):
+                score += 5
+
+            # year
+            if extract_year(cell):
+                score += 3
+
+            # text
+            if not is_number(cell):
+                score += 1
+
+            # numeric data
+            else:
+                score -= 1
+
+        if score > best_score:
+            best_score = score
+            best_row = ri
+
+    return best_row
+
+def detect_columns(header):
+
+    metric_col = None
+
+    unit_col = None
+
+    year_cols = {}
+
+    text_score = []
+
+    for ci, cell in enumerate(header):
+
+        txt = normalize_text(cell)
+
+        lower = txt.lower()
+
+        score = 0
+
+        # metric keyword
+        if any(k in lower for k in METRIC_KEYWORDS):
+            score += 100
+
+        # year column
+        year = extract_year(txt)
+
+        if year:
+            year_cols[ci] = year
+            score -= 100
+
+        # unit
+        if any(k in lower for k in UNIT_KEYWORDS):
+            unit_col = ci
+            score -= 50
+
+        # text-like header
+        if txt and not is_number(txt):
+            score += 5
+
+        text_score.append(score)
+
+    if text_score:
+
+        metric_col = max(
+            range(len(text_score)),
+            key=lambda i: text_score[i]
+        )
+
+    else:
+
+        metric_col = 0
+
+    return metric_col, unit_col, year_cols
 
 def run(ocr_path, labels_path, image_root, out_dir):
     os.makedirs(out_dir, exist_ok=True)
@@ -23,15 +322,17 @@ def run(ocr_path, labels_path, image_root, out_dir):
     all_results = []
 
     for img_name in sorted(ocr_data.keys()):
+        print("="*60)
+        print(img_name)
+
         words = ocr_data.get(img_name, [])
         labels = label_data.get(img_name, [])
-        if not words or not labels:
-            continue
+
+        print("words :", len(words))
+        print("labels:", len(labels))
 
         img_path = os.path.join(image_root, img_name)
-        if not os.path.exists(img_path):
-            continue
-
+        print("image exists:", os.path.exists(img_path))
         img = Image.open(img_path).convert("RGB")
         iw, ih = img.size
         page_area = iw * ih
@@ -50,6 +351,10 @@ def run(ocr_path, labels_path, image_root, out_dir):
             for i in range(min(len(words), len(labels)))
             if labels[i] == TABLE_LABEL
         ]
+        print(img_name)
+        print("OCR words:", len(words))
+        print("Labels:", len(labels))
+        print("Table tokens:", len(table_tokens))
         # Output 2: LayoutLMv3 label visualization
         _draw_layoutlmv3_vis(img, words, labels, page_dir, base)
 
@@ -61,13 +366,15 @@ def run(ocr_path, labels_path, image_root, out_dir):
             print(f"  {img_name}: 0 tables (<{MIN_TOKENS_PER_REGION} table tokens)")
             all_results.extend(page_log["regions"])
             continue
-
+        print("MIN:", MIN_TOKENS_PER_REGION)
         # Step A: Cluster table tokens vertically (separate stacked tables)
         vertical_clusters = split_by_vertical_gap(table_tokens, ih, VERTICAL_GAP_MULTIPLIER)
 
         # Step B: Within each vertical cluster, detect column gaps then build regions
         # Only table-labeled tokens (label == "table") are used — no all_tokens scan
         valid_regions = []
+        print("Vertical clusters:", len(vertical_clusters))
+        print("Valid regions:", len(valid_regions))
         for cluster in vertical_clusters:
             if len(cluster) < MIN_TOKENS_PER_REGION:
                 page_log["skipped"].append({"reason": "too_few_table_tokens", "n": len(cluster)})
@@ -102,7 +409,7 @@ def run(ocr_path, labels_path, image_root, out_dir):
         for ti, reg in enumerate(valid_regions):
             crop_box = reg["crop_box"]
             crop_img = img.crop(crop_box)
-
+            
             # Convert table-labeled tokens to crop coordinates
             # Only tokens with label == "table" are used for cell assignment
             crop_tokens = []
@@ -121,7 +428,7 @@ def run(ocr_path, labels_path, image_root, out_dir):
                 page_log["skipped"].append({"reason": "crop_too_few_tokens", "bbox": crop_box})
                 continue
 
-            result = _process_crop(
+            result, fail_reason = _process_crop(
                 tatr, crop_img, crop_tokens, reg["bbox"], crop_box,
                 base, ti, page_dir, img
             )
@@ -136,14 +443,27 @@ def run(ocr_path, labels_path, image_root, out_dir):
                     "output_shape": [result.get("rows", 0), result.get("cols", 0)],
                 })
             else:
-                page_log["skipped"].append({"reason": "processing_failed", "bbox": crop_box})
+                page_log["skipped"].append({"reason": "processing_failed", "detail": fail_reason, "bbox": crop_box})
 
         # Draw all table regions on page overview
         _draw_page_overview(img, page_results, page_dir, base)
 
         # Write log
+        def _find_sets(obj, path="page_log"):
+            if isinstance(obj, set):
+                print(f"!!! SET FOUND at {path}: {obj}")
+            elif isinstance(obj, dict):
+                for k, v in obj.items():
+                    _find_sets(v, f"{path}.{k}")
+            elif isinstance(obj, (list, tuple)):
+                for i, v in enumerate(obj):
+                    _find_sets(v, f"{path}[{i}]")
+
+        _find_sets(page_log)
+
         with open(os.path.join(page_dir, "log.json"), "w", encoding="utf-8") as f:
             json.dump(page_log, f, ensure_ascii=False, indent=2)
+
 
         total_metrics = sum(len(r["extracted_metrics"]) for r in page_results)
         if page_results:
@@ -156,6 +476,8 @@ def run(ocr_path, labels_path, image_root, out_dir):
 
     _export_master(out_dir)
     _export_all_json(all_results, out_dir)
+    _export_pending_classification(all_results, out_dir)
+
     tab_count = sum(1 for r in all_results if r.get("is_esg"))
     print(f"\nDone. {len(all_results)} tables ({tab_count} ESG)")
 
@@ -182,7 +504,10 @@ def _merge_overlapping(regions):
 
 def _process_crop(tatr, crop_img, crop_tokens, raw_bbox, crop_box, base, ti, page_dir, full_img):
     if len(crop_tokens) < MIN_TOKENS_PER_REGION:
-        return None
+        return None, "too_few_crop_tokens"
+    # DEBUG: luôn lưu crop để xem bằng mắt, kể cả khi fail sau này
+    os.makedirs(page_dir, exist_ok=True)
+    crop_img.save(os.path.join(page_dir, f"DEBUG_table_{ti:02d}_crop.jpg"))
 
     t0 = time.time()
     cells = tatr.detect(crop_img)
@@ -191,7 +516,7 @@ def _process_crop(tatr, crop_img, crop_tokens, raw_bbox, crop_box, base, ti, pag
     n_cols = sum(1 for c in cells if c["class_name"] == "table column")
 
     if n_rows < MIN_ROWS or n_cols < MIN_COLS:
-        return None
+        return None, f"tatr_structure_insufficient (rows={n_rows}, cols={n_cols}, MIN_ROWS={MIN_ROWS}, MIN_COLS={MIN_COLS})"
 
     rows_sorted = sorted(
         [c for c in cells if c["class_name"] == "table row"],
@@ -224,31 +549,26 @@ def _process_crop(tatr, crop_img, crop_tokens, raw_bbox, crop_box, base, ti, pag
 
     table_grid = _clean_table(table_grid)
     if len(table_grid) < MIN_ROWS or len(table_grid[0]) < MIN_COLS:
-        return None
+        return None, f"grid_too_small_after_clean ({len(table_grid)}x{len(table_grid[0]) if table_grid else 0})"
 
-    extracted = _extract_esg(table_grid)
+    print("Grid:", len(table_grid), len(table_grid[0]))
+    extracted = _extract_esg(table_grid, page=base, table_id=f"table_{ti:02d}")
     has_data = any(is_numeric(cell) for row in table_grid for cell in row)
     has_esg = any(kw in cell.lower() for row in table_grid for cell in row for kw in ESG_KEYWORDS)
     if not has_data:
-        return None
+        return None, "no_numeric_after_tatr_grid"
 
     _save_debug_images(full_img, crop_img, cells, crop_box, page_dir, ti, base)
 
     return {
-        "page": base,
-        "table_id": f"table_{ti:02d}",
-        "bbox": raw_bbox,
-        "crop_bbox": crop_box,
-        "source_label": TABLE_LABEL,
-        "table_data": table_grid,
-        "rows": len(table_grid),
+        "page": base, "table_id": f"table_{ti:02d}", "bbox": raw_bbox,
+        "crop_bbox": crop_box, "source_label": TABLE_LABEL,
+        "table_data": table_grid, "rows": len(table_grid),
         "cols": len(table_grid[0]) if table_grid else 0,
-        "extracted_metrics": extracted,
-        "is_esg": has_esg,
-        "tatr_cells": len(cells),
-        "tatr_time": round(det_time, 2),
+        "extracted_metrics": extracted, "is_esg": has_esg,
+        "tatr_cells": len(cells), "tatr_time": round(det_time, 2),
         "tokens_in_crop": len(crop_tokens),
-    }
+    }, None
 
 
 def _nearest(coord, items, axis="y"):
@@ -294,53 +614,130 @@ def _clean_table(grid):
     return grid
 
 
-def _extract_esg(grid):
-    metrics = []
-    for ri, row in enumerate(grid):
-        for ci, cell in enumerate(row):
-            cell_text = cell.strip()
-            if not cell_text:
+def _extract_year_column_map(grid, header_rows=2):
+    """Quet header_rows dong dau tim nam theo TUNG COT.
+    Xu ly bang so sanh nhieu nam: nam chi xuat hien 1 lan o header,
+    khong lap lai trong moi cell so lieu."""
+    year_by_col = {}
+    ncols = len(grid[0]) if grid else 0
+    for ri in range(min(header_rows, len(grid))):
+        for ci in range(ncols):
+            cell = grid[ri][ci].strip()
+            if not cell:
                 continue
-            if not is_numeric_lenient(cell_text.replace("VND", "").strip()):
-                continue
-            metric_name = ""
-            for ci2 in range(ci):
-                candidate = row[ci2].strip()
-                if candidate and not is_numeric_lenient(candidate.replace("VND", "").strip()):
-                    metric_name = candidate
-                    break
-            year = None
-            ym = re.findall(YEAR_PATTERN, cell_text)
+            ym = re.findall(YEAR_PATTERN, cell)
             if ym:
-                year = int(ym[-1][1])
-            unit = ""
-            for p in ESG_UNIT_PATTERNS:
-                m = re.search(p, cell_text, re.I)
-                if m:
-                    unit = m.group(0)
-                    break
-            if not unit and metric_name:
-                for p in ESG_UNIT_PATTERNS:
-                    m = re.search(p, metric_name, re.I)
-                    if m:
-                        unit = m.group(0)
-                        break
-            scope = ""
-            for kw in ["scope 1", "scope 2", "scope 3", "scope i", "scope ii", "scope iii"]:
-                if kw in metric_name.lower():
-                    parts = kw.split()
-                    scope = f"Scope {parts[-1].upper()}"
-                    break
-            value = parse_number(cell_text)
-            is_esg_metric = any(kw in (metric_name + " " + cell_text).lower() for kw in ESG_KEYWORDS)
-            if value is not None:
-                metrics.append({
-                    "metric": metric_name, "value": value, "unit": unit,
-                    "year": year, "scope": scope, "is_esg": is_esg_metric,
-                    "row": ri, "col": ci,
-                })
-    return metrics
+                year_by_col[ci] = int(ym[-1][1])
+    return year_by_col
 
+
+def _extract_esg(table_grid, page, table_id, report_year=None):
+    """
+    report_year: năm mặc định lấy từ filename/cover page (Mốc học được: nên có
+    bước report-year-extraction upstream). Dùng làm fallback khi bảng không có
+    cột năm rõ ràng.
+    """
+    metrics = []
+    seen = set()
+
+    if not table_grid:
+        return metrics
+    if len(table_grid) == 1:
+        row = table_grid[0]
+        # Heuristic: ô đầu tiên không phải số -> coi là metric label,
+        # các ô còn lại nếu là số -> value (year lấy từ report_year, chưa xác định theo cột)
+        metric_col = next((ci for ci, c in enumerate(row) if not is_number(c) and c.strip()), None)
+        if metric_col is None:
+            return metrics  # không có label -> bỏ qua, tránh đoán bừa
+        metric = clean_metric(row[metric_col])
+        if metric == "" or metric.lower() in INVALID_METRICS or is_heading(metric) or is_total(metric):
+            return metrics
+        for ci, cell in enumerate(row):
+            if ci == metric_col:
+                continue
+            value = clean_metric(cell)
+            if not is_number(value):
+                continue
+            value = float(value.replace(",", ""))
+            text = metric.lower()
+            metrics.append({
+                "metric_id": f"{table_id}_0_{ci}",
+                "page": page, "table_id": table_id, "row": 0, "col": ci,
+                "metric_text": metric, "value": value, "unit": "",
+                "year": report_year,
+                "year_source": "single_row_table_report_year",
+                "scope": None, "scope_source": "unresolved",
+                "needs_classification": True,
+                "is_esg": any(kw in text for kw in ESG_KEYWORDS),
+            })
+        return metrics
+
+    header_row = detect_header_row(table_grid)
+    metric_col, unit_col, year_cols = detect_columns(table_grid[header_row])
+
+    # --- FALLBACK 1: quét nhiều dòng header thay vì chỉ 1 dòng ---
+    if not year_cols:
+        year_cols = _extract_year_column_map(table_grid, header_rows=header_row + 1)
+
+    # --- FALLBACK 2: bảng chỉ có 1 giá trị/năm (không ghi năm trong bảng) ---
+    # Thay vì bỏ toàn bộ bảng, coi mọi cột số (trừ metric_col, unit_col) là
+    # "value column" gắn với report_year (có thể None -> "unresolved_year")
+    use_fallback_year = False
+    if not year_cols:
+        use_fallback_year = True
+        ncols = len(table_grid[header_row]) if table_grid else 0
+        year_cols = {
+            ci: report_year
+            for ci in range(ncols)
+            if ci != metric_col and ci != unit_col
+        }
+
+    for ri in range(header_row + 1, len(table_grid)):
+        row = table_grid[ri]
+        if metric_col >= len(row):
+            continue
+
+        metric = clean_metric(row[metric_col])
+        if metric == "" or metric.lower() in INVALID_METRICS:
+            continue
+        if is_heading(metric) or is_total(metric):
+            continue
+
+        unit = clean_metric(row[unit_col]) if (unit_col is not None and unit_col < len(row)) else ""
+
+        for ci, year in year_cols.items():
+            if ci >= len(row):
+                continue
+            value = clean_metric(row[ci])
+            if not is_number(value):
+                continue
+            value = float(value.replace(",", ""))
+
+            key = (metric.lower(), year, value, ci)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            text = (metric + " " + unit).lower()
+            is_esg = any(kw in text for kw in ESG_KEYWORDS)
+
+            metrics.append({
+                "metric_id": f"{table_id}_{ri}_{ci}",
+                "page": page,
+                "table_id": table_id,
+                "row": ri, "col": ci,
+                "metric_text": metric,
+                "value": value,
+                "unit": unit,
+                "year": year,  # có thể None nếu report_year cũng None
+                "year_source": "fallback_no_year_column" if use_fallback_year else "table_header",
+                "scope": None,
+                "scope_source": "unresolved",
+                "needs_classification": True,
+                "is_esg": is_esg,
+            })
+
+    return metrics
 
 def _draw_ocr_vis(img, words, page_dir, base):
     draw = ImageDraw.Draw(img)
@@ -455,9 +852,12 @@ def _export_page_html(results, page_dir, base):
         metrics_rows = ""
         for m in r["extracted_metrics"][:50]:
             metrics_rows += (
-                f"<tr><td>{m['metric']}</td><td class='vl'>{m['value']}</td>"
-                f"<td>{m['unit']}</td><td>{m['year'] or ''}</td>"
-                f"<td>{m['scope']}</td><td>{'ESG' if m['is_esg'] else ''}</td></tr>"
+                f"<tr><td>{m.get('metric_text','')}</td>"
+                f"<td class='vl'>{m.get('value','')}</td>"
+                f"<td>{m.get('unit','')}</td>"
+                f"<td>{m.get('year') or ''}</td>"
+                f"<td>{m.get('scope') or ''}</td>"
+                f"<td>{'ESG' if m.get('is_esg') else ''}</td></tr>"
             )
 
         html = f"""<!DOCTYPE html><html><head><meta charset='utf-8'><style>
@@ -555,6 +955,15 @@ def _export_all_json(all_results, out_dir):
     with open(os.path.join(out_dir, "all_tables.json"), "w", encoding="utf-8") as f:
         json.dump(all_results, f, ensure_ascii=False, indent=2)
 
+def _export_pending_classification(all_results, out_dir):
+    pending = [
+        m for r in all_results for m in r.get("extracted_metrics", [])
+        if m.get("needs_classification")
+    ]
+    with open(os.path.join(out_dir, "pending_scope_classification.json"), "w", encoding="utf-8") as f:
+        json.dump(pending, f, ensure_ascii=False, indent=2)
+    print(f"  -> {len(pending)} metrics can ClimateBERT resolve (pending_scope_classification.json)")
+    return pending
 
 def _export_master(out_dir):
     bases = sorted([e for e in os.listdir(out_dir)

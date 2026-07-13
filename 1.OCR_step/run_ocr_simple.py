@@ -52,15 +52,15 @@ def main():
                 if ocr is not None:
                     del ocr
                     gc.collect()
-                ocr = PaddleOCR(use_gpu=False, lang=args.lang,
-                                use_angle_cls=False, rec_batch_num=8, show_log=False)
+                ocr = PaddleOCR( lang=args.lang,
+                                use_angle_cls=False, rec_batch_num=8)
 
             img_path = os.path.join(args.root, fn)
             if not os.path.exists(img_path):
                 results[fn] = []
                 continue
 
-            ocr_result = ocr.ocr(img_path, cls=False)
+            ocr_result = ocr.ocr(img_path)
             words = []
             page = ocr_result[0] if ocr_result and ocr_result[0] is not None else []
             for line in page:
