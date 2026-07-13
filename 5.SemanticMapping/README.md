@@ -1,533 +1,163 @@
-# Eco-Lens Semantic Mapping - ClimateBERT Scope Classifier
-
-## 1. Tổng quan dự án
-
-Module này là phần triển khai của bước Semantic Text Understanding trong pipeline Eco-Lens cho báo cáo ESG. Mục tiêu chính là phân loại các đoạn văn bản ESG đã được trích xuất thành 4 nhãn:
-
-- Other
-- Scope 1
-- Scope 2
-- Scope 3
-
-Quá trình này được thực hiện bằng mô hình ClimateBERT fine-tuned cho bài toán sequence classification. Kết quả dự đoán sẽ được dùng cho các bước Semantic Mapping / Knowledge Base phía sau.
-
-### Mục đích
-- Phân loại văn bản ESG thành các nhóm phạm vi phát thải.
-- Tạo dữ liệu đầu vào có nhãn cho các module sau.
-- Cung cấp một mô hình có thể tái sử dụng cho inference.
-
-### Đầu ra mong đợi
-- Một mô hình classifier có thể dự đoán nhãn Scope cho đoạn văn bản đầu vào.
-- Các file đánh giá như classification report, confusion matrix, predictions CSV.
-- Các artifact huấn luyện được lưu sẵn để tiếp tục sử dụng.
-
-### Vì sao dùng ClimateBERT
-Notebook huấn luyện sử dụng mô hình ClimateBERT đã được pretrain trên dữ liệu liên quan đến khí hậu và môi trường, phù hợp hơn với văn bản ESG so với mô hình ngôn ngữ chung.
-
----
-
-## 2. Vị trí trong Pipeline
-
-Module này nằm ở giai đoạn phân loại ngữ nghĩa sau khi OCR và LayoutLMv3 đã tạo được các đoạn văn bản từ trang báo cáo.
-
-```text
-OCR
-  ↓
-LayoutLMv3
-  ↓
-ClimateBERT Scope Classification (Module hiện tại)
-  ↓
-Semantic Mapping
-  ↓
-Knowledge Base
-  ↓
-RAG
-  ↓
-LLM
-  ↓
-Phân tích ESG cuối cùng
-```
-
----
-
-## 3. Cấu trúc thư mục
-
-```text
-5.SemanticMapping/
-├── Train_ClimateBERT_Scope.ipynb        # Notebook huấn luyện và đánh giá mô hình
-├── Inference_ClimateBERT_Scope.ipynb    # Chạy inference Scope trên kết quả LayoutLMv3
-├── Create_Scope_Dataset.ipynb           # Notebook tạo / chuẩn bị dataset
-├── balance_scope_dataset.py             # Script làm sạch và cân bằng dataset
-├── layoutlmv3_inference.py              # Script inference bằng LayoutLMv3 (không phải classifier Scope)
-├── scope_dataset_balanced.csv           # Dataset huấn luyện đã được làm sạch và cân bằng
-├── scope_dataset_balanced.xlsx          # Bản Excel tương ứng
-├── label_scope_dataset.xlsx             # Dataset gốc có nhãn Scope
-├── reason.md                            # Giải thích logic cân bằng dataset
-├── ClimateBERT_Scope/                   # Thư mục checkpoint và mô hình tốt nhất
-│   └── best_scope_classifier/          # Mô hình đã lưu sẵn cho inference
-├── scope_dataset/                       # Bản sao dataset dùng cho huấn luyện
-├── output/                              # Output từ các bước semantic mapping
-├── semantic_output/                     # Output JSON/semantic blocks
-├── faiss/                               # Index và metadata FAISS
-├── ESG_KB.zip                           # Kho kiến thức ESG
-├── ESG_Knowledge_Base.ipynb             # Notebook xây dựng / thao tác knowledge base
-├── SemanticMapping_FAISS.ipynb          # Notebook cho FAISS / semantic mapping
-└── 0_layoutlmv3_layout.json             # File layout từ LayoutLMv3
-```
-
-### Vai trò các thành phần quan trọng
-- Notebook huấn luyện: thực hiện load dữ liệu, chia train/validation/test, tokenization, fine-tuning, đánh giá và lưu mô hình.
-- Inference_ClimateBERT_Scope.ipynb: load mô hình ClimateBERT đã fine-tune, đọc file 0_layoutlmv3_layout.json, trích xuất các block text/figure, dự đoán Scope cho từng block, rồi sinh scope_predictions.json và scope_predictions.csv.
-- Script balance_scope_dataset.py: làm sạch dataset, loại bỏ nội dung nhiễu, cân bằng phân bố lớp, tạo file CSV/XLSX đầu ra.
-- Thư mục ClimateBERT_Scope: lưu checkpoint theo seed và mô hình tốt nhất.
-- Thư mục output / semantic_output: chứa kết quả trung gian và semantic blocks dùng cho các bước tiếp theo.
-
----
-
-## 4. Đầu vào
-
-### Dataset đầu vào
-Module hiện tại sử dụng dữ liệu được chuẩn bị từ các đoạn văn bản ESG. Trong notebook huấn luyện, dữ liệu được đọc từ:
-
-- scope_dataset/scope_dataset_balanced.csv
-- hoặc file CSV tương ứng trong thư mục gốc
-
-### Các cột dùng cho training
-Notebook huấn luyện chỉ sử dụng 2 cột chính:
-
-- text
-- scope
-
-### Tiền xử lý dữ liệu
-Trước khi huấn luyện, dữ liệu được:
-- shuffle với random_state=42
-- loại bỏ hàng có text rỗng hoặc chỉ toàn khoảng trắng
-- giữ lại các cột cần thiết
-- gán nhãn số bằng mapping:
-  - Other -> 0
-  - Scope 1 -> 1
-  - Scope 2 -> 2
-  - Scope 3 -> 3
-
-### Chia Train / Validation / Test
-Notebook dùng phương pháp train_test_split theo stratify trên label:
-- Train: 80%
-- Validation: 10%
-- Test: 10%
-
-Cụ thể:
-1. Chia ban đầu train 80% và temp 20%
-2. Chia temp thành validation 50% và test 50%
-
-### Label Mapping
-
-| Label gốc | Label số |
-|---|---:|
-| Other | 0 |
-| Scope 1 | 1 |
-| Scope 2 | 2 |
-| Scope 3 | 3 |
-
-### Dataset gốc cho việc cân bằng
-Script balance_scope_dataset.py đọc file Excel gốc label_scope_dataset.xlsx và yêu cầu các cột như:
-- block_id
-- page
-- bbox
-- type
-- confidence
-- semantic_standard
-- semantic_document
-- semantic_score
-- matched_chunk
-- matched_page
-- matched_document
-- text
-- scope
-
----
-
-## 5. Kiến trúc mô hình
-
-### Base model
-- climatebert/distilroberta-base-climate-f
-
-### Tokenizer
-- AutoTokenizer từ cùng model
-
-### Mục tiêu bài toán
-- Sequence Classification
-- Số lớp đầu ra: 4 lớp
-
-### Cách hoạt động
-- Văn bản đầu vào được tokenize và padding/truncation về max_length 256.
-- Mô hình dự đoán xác suất cho 4 nhãn Scope.
-- Label được chuyển thành id và lưu trong label_mapping.json.
-
-### Vì sao phù hợp
-Mô hình này phù hợp vì:
-- được pretrain trên dữ liệu liên quan đến khí hậu và môi trường
-- có khả năng xử lý văn bản ngắn/đến trung bình như câu hoặc đoạn ESG
-- dễ tích hợp vào pipeline Hugging Face hiện có
-
----
-
-## 6. Quy trình huấn luyện
-
-Pipeline huấn luyện được triển khai như sau:
-
-```text
-Dataset
-  ↓
-Preprocessing
-  ↓
-Tokenization
-  ↓
-ClimateBERT Fine-tuning
-  ↓
-Validation
-  ↓
-Testing
-  ↓
-Best Model Selection
-  ↓
-Save Artifacts
-```
-
-### Các bước thực tế trong notebook
-1. Tải dataset từ file CSV.
-2. Làm sạch và loại bỏ dòng text rỗng.
-3. Gán nhãn số bằng label mapping.
-4. Chia train/validation/test bằng stratified split.
-5. Chuyển dataset sang Hugging Face Dataset.
-6. Tokenize bằng tokenizer.
-7. Huấn luyện 5 seed khác nhau: 42, 123, 2026, 3407, 8888.
-8. Đánh giá trên validation và test.
-9. Chọn best model theo macro F1 trên validation.
-10. Lưu mô hình tốt nhất và các file báo cáo.
-
-Sau khi huấn luyện xong, luồng suy luận sẽ tiếp tục như sau:
-
-```text
-Best Scope Classifier
-  ↓
-Inference_ClimateBERT_Scope.ipynb
-  ↓
-0_layoutlmv3_layout.json
-  ↓
-Extract text blocks
-  ↓
-Scope Prediction
-  ↓
-scope_predictions.json
-scope_predictions.csv
-```
----
-
-## 7. Cấu hình huấn luyện
-
-Các hyperparameter quan trọng được tìm thấy trong notebook:
-
-| Tham số | Giá trị |
-|---|---:|
-| Base model | climatebert/distilroberta-base-climate-f |
-| Max length | 256 |
-| Batch size | 16 |
-| Learning rate | 2e-5 |
-| Weight decay | 0.01 |
-| Epochs | 20 |
-| Optimizer | AdamW (adamw_torch) |
-| Evaluation strategy | epoch |
-| Save strategy | epoch |
-| Logging strategy | epoch |
-| Early stopping patience | 2 |
-| Multi-seed training | Có (5 seeds) |
-| Resume training | Có |
-| Mixed precision | fp16 nếu CUDA có sẵn |
-
-### Các tùy chọn huấn luyện khác
-- load_best_model_at_end=True
-- metric_for_best_model="macro_f1"
-- greater_is_better=True
-- save_total_limit=1
-- report_to="wandb"
-
----
-
-## 8. Các file đầu ra
-
-Các file đầu ra chính được sinh ra trong thư mục best_scope_classifier:
-
-| File | Chức năng |
-|---|---|
-| config.json | Cấu hình mô hình Hugging Face |
-| model.safetensors | Trọng số mô hình |
-| tokenizer.json | Tokenizer JSON |
-| tokenizer_config.json | Cấu hình tokenizer |
-| training_config.json | Siêu tham số và thông tin huấn luyện |
-| label_mapping.json | Bản đồ giữa nhãn và id |
-| training_summary.csv | Kết quả huấn luyện theo từng seed |
-| results_summary.csv | Tổng hợp thống kê trung bình / độ lệch chuẩn |
-| predictions.csv | Dự đoán trên tập test với true label, pred label và confidence |
-| classification_report.txt | Báo cáo phân loại theo text |
-| classification_report.json | Báo cáo phân loại theo JSON |
-| confusion_matrix.png | Biểu đồ confusion matrix |
-| confusion_matrix.csv | Ma trận nhầm lẫn dạng CSV |
-| scope_predictions.csv | Kết quả dự đoán Scope cho toàn bộ block từ đầu ra LayoutLMv3 |
-| scope_predictions.json | Kết quả inference dạng JSON phục vụ pipeline tiếp theo |
-| README.txt | Tóm tắt nhanh về mô hình và môi trường |
-
-### Thư mục checkpoint
-Bên cạnh mô hình tốt nhất, notebook còn lưu checkpoint theo từng seed trong thư mục:
-- ClimateBERT_Scope/seed_42
-- ClimateBERT_Scope/seed_123
-- ClimateBERT_Scope/seed_2026
-- ClimateBERT_Scope/seed_3407
-- ClimateBERT_Scope/seed_8888
-
----
-
-## 9. Tích hợp WandB
-
-Notebook có tích hợp Weights & Biases để theo dõi và lưu kết quả huấn luyện.
-
-### Những thứ được ghi lên WandB
-- Training loss
-- Validation loss
-- Accuracy
-- Macro Precision
-- Macro Recall
-- Macro F1
-- Weighted Precision
-- Weighted Recall
-- Weighted F1
-- Confusion Matrix
-- Classification Report
-- Model artifact
-
-### Artifact được upload
-- best_scope_classifier (dạng model artifact)
-- confusion_matrix.png
-- training_summary.csv
-- results_summary.csv
-- predictions.csv
-- confusion_matrix.csv
-- classification_report.json
-- README.txt
-
----
-
-## 10. Resume Training
-
-Notebook có cơ chế tiếp tục huấn luyện từ checkpoint khi quá trình chạy bị gián đoạn.
-
-### Cách hoạt động
-- Mỗi seed có thư mục output riêng: seed_{seed}
-- Nếu thư mục checkpoint tồn tại, trainer sẽ gọi get_last_checkpoint để tìm checkpoint mới nhất.
-- Nếu file completed.txt tồn tại, notebook sẽ bỏ qua seed đó.
-- Nếu không có checkpoint, huấn luyện bắt đầu từ đầu.
-
-### Ứng dụng thực tế
-Cơ chế này phù hợp khi:
-- phiên Colab bị ngắt
-- quá trình huấn luyện bị treo
-- cần tiếp tục chạy từ checkpoint gần nhất thay vì bắt đầu lại
-
-> Chưa được triển khai (Not implemented): chưa thấy script CLI riêng để resume từ dòng lệnh ngoài notebook.
-
----
-
-## 11. Inference Pipeline
-
-Sau khi huấn luyện, mô hình có thể được dùng để suy luận trực tiếp trên đầu ra của LayoutLMv3.
-
-### Input
-File đầu vào cho luồng inference là:
-
-- 0_layoutlmv3_layout.json
-
-File này được tạo ở bước LayoutLMv3 và chứa các block đã được nhận dạng từ trang báo cáo.
-
-### Load Model
-Notebook Inference_ClimateBERT_Scope.ipynb sẽ load:
-
-- tokenizer
-- ClimateBERT classifier đã fine-tune
-- label_mapping.json
-
-### Extract Text Blocks
-Notebook chỉ xử lý các block có kiểu:
-
-- text
-- figure
-
-Các block loại:
-
-- table
-- header
-- footer
-- ignore
-- các loại khác
-
-sẽ được bỏ qua trong quá trình dự đoán Scope.
-
-### Scope Prediction
-Mỗi block được dự đoán thành:
-
-- Scope
-- Scope ID
-- Confidence
-- Probability của từng lớp
-
-### Output
-Notebook sinh ra các file kết quả:
-
-- scope_predictions.csv
-- scope_predictions.json
-
-### Ví dụ output
-```json
-{
-  "page": 15,
-  "block_id": 8,
-  "label": "text",
-  "text": "Purchased electricity...",
-  "scope": "Scope 2",
-  "scope_id": 2,
-  "confidence": 0.987,
-  "probabilities": {
-    "Other": 0.001,
-    "Scope 1": 0.004,
-    "Scope 2": 0.987,
-    "Scope 3": 0.008
-  }
-}
-```
-
----
-
-## 12. Tái sử dụng mô hình đã huấn luyện
-
-Mô hình đã huấn luyện có thể được tái sử dụng bằng cách load lại tokenizer và model từ thư mục best_scope_classifier.
-
-Notebook Inference_ClimateBERT_Scope.ipynb cung cấp ví dụ hoàn chỉnh cho việc:
-- đọc đầu ra LayoutLMv3
-- tokenize tự động
-- batch inference
-- lưu CSV
-- lưu JSON
-- tính confidence
-
-### Cách dùng cơ bản
-- Dùng AutoTokenizer.from_pretrained(path)
-- Dùng AutoModelForSequenceClassification.from_pretrained(path)
-- Tokenize đoạn văn bản đầu vào
-- Chạy inference và lấy nhãn có xác suất cao nhất
-
-### Ví dụ ngắn
-```python
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
-
-model_path = "ClimateBERT_Scope/best_scope_classifier"
-
-tokenizer = AutoTokenizer.from_pretrained(model_path)
-model = AutoModelForSequenceClassification.from_pretrained(model_path)
-```
-
----
-
-## 13. Tích hợp với các module khác
-
-### Input
-Luồng dữ liệu đầu vào cho module này như sau:
-
-```text
-0_layoutlmv3_layout.json
-  ↓
-Inference_ClimateBERT_Scope.ipynb
-  ↓
-scope_predictions.json
-  ↓
-Semantic Mapping
-  ↓
-Knowledge Base Retrieval
-  ↓
-FAISS
-  ↓
-RAG
-  ↓
-LLM ESG Analysis
-```
-
-### Output
-Kết quả dự đoán Scope sẽ phục vụ cho các module phía sau:
-- Semantic Mapping
-- Knowledge Base Retrieval
-- FAISS / retrieval
-- RAG / LLM cho phân tích ESG cuối cùng
-
----
-
-## 14. Xử lý sự cố
-
-Các lỗi thường gặp và cách xử lý:
-
-- GPU Out Of Memory (OOM)
-  - giảm batch size
-  - giảm max_length
-  - dùng CPU nếu cần
-
-- Khôi phục từ checkpoint
-  - dùng thư mục seed_x và resume_from_checkpoint
-
-- Đăng nhập WandB
-  - chạy wandb.login() trước khi huấn luyện
-
-- Không tương thích phiên bản Transformers
-  - notebook có kiểm tra version và dùng TrainingArguments phù hợp
-
-- Sai định dạng dataset
-  - đảm bảo cột text và scope tồn tại
-  - đảm bảo text không rỗng
-
-- Thiếu file model hoặc tokenizer
-  - kiểm tra thư mục best_scope_classifier và checkpoint tương ứng
-
-- Colab / Google Drive path mismatch
-  - notebook hiện đang dùng đường dẫn /content/drive/MyDrive/...
-
----
-
-## 15. Thư viện phụ thuộc
-
-Các thư viện Python quan trọng được sử dụng:
-
-- pandas
-- numpy
-- torch
-- datasets
-- transformers
-- scikit-learn
-- matplotlib
-- wandb
-- accelerate
-- evaluate
-- sentencepiece
-
----
-
-## 16. Hướng cải tiến trong tương lai
-
-Dựa trên mã nguồn hiện tại, các hướng cải tiến có thể gồm:
-
-- ✅ Đã có notebook inference cho batch prediction từ LayoutLMv3.
-- ⏳ Chưa có CLI hoặc REST API để chạy production.
-- ⏳ Chưa tối ưu batch inference cho GPU trên nhiều tài liệu.
-- ⏳ Có thể bổ sung ngưỡng confidence để đánh dấu các dự đoán cần xem xét thủ công.
-- ⏳ Có thể chuẩn hóa thêm schema đầu vào/đầu ra cho pipeline tiếp theo.
-- ⏳ Có thể so sánh các base model khác ngoài ClimateBERT.
-
----
-
-## Kết luận
-
-Module này là một phần quan trọng của pipeline Eco-Lens để biến các đoạn văn bản ESG thành nhãn Scope 1/2/3/Other. Với mô hình ClimateBERT fine-tuned và luồng inference trên đầu ra LayoutLMv3, module này cung cấp một cơ chế phân loại ngữ nghĩa có thể tái sử dụng cho các bước xử lý, truy xuất và phân tích ESG phía sau.
+# Semantic Mapping Pipeline
+
+This folder contains a pipeline for ESG knowledge extraction, semantic mapping, dataset creation, and scope classification using LayoutLMv3 and ClimateBERT.
+
+## Pipeline order
+
+1. `ESG_Knowledge_Base.ipynb`
+2. `layoutlmv3_inference.py`
+3. `SemanticMapping_FAISS.ipynb`
+4. `Create_Scope_Dataset.ipynb`
+5. `balance_scope_dataset.py`
+6. `Train_ClimateBERT_Scope.ipynb`
+7. `Inference_ClimateBERT_Scope.ipynb`
+
+## File summaries and data flow
+
+### 1. `ESG_Knowledge_Base.ipynb`
+- Purpose: build an ESG knowledge base from raw PDF reports and allow semantic search.
+- Main steps:
+  - unzip `ESG_KB.zip` and read PDF files with `pymupdf`/`fitz`
+  - extract page text into a document/page JSON structure
+  - clean text and chunk each page into ESG text chunks
+  - save chunks to `output/esg_chunks.json`
+  - embed chunks with `climatebert/distilroberta-base-climate-f`
+  - save embeddings to `output/embeddings.npy`
+  - normalize embeddings and build a FAISS index
+  - save `faiss/esg.index` and metadata to `faiss/metadata.json`
+  - run example semantic search queries against the FAISS knowledge base
+- Input:
+  - `ESG_KB.zip` containing ESG report PDF files
+- Outputs:
+  - `output/raw_documents.json` (document/page text structure)
+  - `output/esg_chunks.json` (chunked ESG text entries)
+  - `output/embeddings.npy` (embedding matrix, shape = [num_chunks, dim])
+  - `faiss/esg.index` (FAISS similarity index)
+  - `faiss/metadata.json` (chunk metadata matching index positions)
+- Data structure:
+  - raw document: list of documents, each with `document`, `file`, `num_pages`, `pages`
+  - chunk: `{chunk_id, document, standard, page, local_chunk, num_words, num_chars, text}`
+  - FAISS metadata: list of chunk records with same fields plus text
+
+### 2. `layoutlmv3_inference.py`
+- Purpose: infer LayoutLMv3 token labels for OCR text and structure text blocks.
+- Main steps:
+  - load fine-tuned LayoutLMv3 token classification checkpoint
+  - read OCR JSON input from `Output/1_OCR/0_ocr_words.json`
+  - for each image in `valid/`, normalize bounding boxes and chunk words into groups of 60
+  - run LayoutLMv3 inference and map token predictions back to words via majority vote
+  - sort words and group them into text/paragraph blocks
+  - save structured page/block output to `test/0_layoutlmv3_layout.json`
+- Input:
+  - `Output/1_OCR/0_ocr_words.json` (OCR words, bboxes, text, confidence)
+  - image files under `valid/`
+  - LayoutLMv3 checkpoint: `Output/2_Model_Layoutlmv3_Finetune/checkpoint-1000`
+- Output:
+  - `test/0_layoutlmv3_layout.json`
+- Data structure:
+  - top-level mapping image name → page record
+  - page record: `{page, num_words, num_blocks, block_summary, blocks}`
+  - block: `{type, labels, text, bbox, confidence, num_lines, num_words, words}`
+  - word: `{text, bbox, label, confidence}`
+
+### 3. `SemanticMapping_FAISS.ipynb`
+- Purpose: semantically map layout text blocks to ESG knowledge base chunks.
+- Main steps:
+  - load layout inference JSON `0_layoutlmv3_layout.json`
+  - extract text/figure blocks with metadata from layout pages
+  - encode each block text using ClimateBERT embeddings
+  - search the prebuilt FAISS knowledge base (`esg.index`) for top matches
+  - attach top match list to each block and select the best semantic match
+  - save `semantic_blocks.json`
+- Input:
+  - `0_layoutlmv3_layout.json`
+  - `faiss/esg.index`
+  - `faiss/metadata.json`
+- Output:
+  - `semantic_output/semantic_blocks.json`
+- Data structure:
+  - semantic block: `{block_id, page, bbox, type, confidence, text, top_matches, semantic_standard, semantic_document, semantic_score}`
+  - each `top_matches` item includes metadata from the FAISS KB plus `score`
+
+### 4. `Create_Scope_Dataset.ipynb`
+- Purpose: create a labeling-ready dataset from semantic mapping blocks.
+- Main steps:
+  - load `semantic_output/semantic_blocks.json`
+  - inspect one sample block structure
+  - build a DataFrame with block metadata and semantic match fields
+  - add an empty `scope` column for manual annotation
+  - produce a label-ready table for download/editing
+- Input:
+  - `semantic_output/semantic_blocks.json`
+- Output:
+  - interactive dataset in notebook, later saved/downloaded as `label_scope_dataset.xlsx`
+- Data structure:
+  - `block_id`, `page`, `text`, `type`, `confidence`, `semantic_standard`, `semantic_document`, `semantic_score`, `matched_chunk`, `matched_page`, `matched_document`, `scope`
+
+### 5. `balance_scope_dataset.py`
+- Purpose: clean, score, and rebalance the manually labeled scope dataset.
+- Main steps:
+  - load `label_scope_dataset.xlsx`
+  - ensure required columns exist and fill missing scope values with `Other`
+  - remove rows with low-quality or meaningless text
+  - deduplicate text and block IDs while keeping higher-quality rows
+  - compute a custom quality score based on semantic score, ESG keywords, text length, and label type
+  - downsample/oversample classes to target sizes
+  - save balanced dataset files
+- Input:
+  - `label_scope_dataset.xlsx`
+- Outputs:
+  - `scope_dataset_balanced.xlsx`
+  - `scope_dataset_balanced.csv`
+- Data structure:
+  - same columns as input plus a computed `quality_score` during processing
+  - target class counts: `Scope 1=1000`, `Scope 2=1000`, `Scope 3=1700`, `Other=1700`
+  - for real: `Scope 1=1000`, `Scope 2=1000`, `Scope 3=1138`, `Other=1700`
+
+### 6. `Train_ClimateBERT_Scope.ipynb`
+- Purpose: fine-tune a ClimateBERT classifier on the balanced scope dataset.
+- Main steps:
+  - load `scope_dataset_balanced.csv`
+  - keep only `text` and `scope` columns and clean empty text
+  - encode labels with `label2id = {Other:0, Scope 1:1, Scope 2:2, Scope 3:3}`
+  - split into train/validation/test sets stratified by label
+  - convert Pandas DataFrames to HuggingFace `Dataset`
+  - load `climatebert/distilroberta-base-climate-f` tokenizer and model
+  - tokenize text with `max_length=256`
+  - define metrics: accuracy, precision, recall, macro/weighted F1
+  - train across multiple random seeds, saving best model by validation macro F1
+  - save best model to `ClimateBERT_Scope/best_scope_classifier`
+  - save `label_mapping.json`, `training_config.json`, and training summary
+- Input:
+  - `scope_dataset_balanced.csv`
+- Outputs:
+  - `ClimateBERT_Scope/best_scope_classifier/` (model + tokenizer)
+  - `ClimateBERT_Scope/best_scope_classifier/label_mapping.json`
+  - training summary/output saved under model directory
+- Data structure:
+  - HF dataset with tokenized fields `input_ids`, `attention_mask`, and labels
+  - metrics dictionaries for train/eval/test
+
+### 7. `Inference_ClimateBERT_Scope.ipynb`
+- Purpose: apply the trained scope classifier to layout blocks.
+- Main steps:
+  - load best model from `ClimateBERT_Scope/best_scope_classifier`
+  - load label mapping from `label_mapping.json`
+  - read layout blocks from `0_layoutlmv3_layout.json`
+  - predict `scope` label, confidence, and probabilities for each block text
+  - save predictions to `SemanticMapping_Inference/scope_predictions.csv` and `scope_predictions.json`
+- Input:
+  - `ClimateBERT_Scope/best_scope_classifier`
+  - `0_layoutlmv3_layout.json`
+- Output:
+  - `SemanticMapping_Inference/scope_predictions.csv`
+  - `SemanticMapping_Inference/scope_predictions.json`
+- Data structure:
+  - each prediction record includes original block fields plus `scope`, `scope_id`, `confidence`, and `probabilities`
+
+## Notes
+
+- `label_scope_dataset.xlsx` is created by manual labeling in `Create_Scope_Dataset.ipynb` and then used by `balance_scope_dataset.py`.
+- `reason.md` documents the balancing rationale used in `balance_scope_dataset.py`.
+- `0_layoutlmv3_layout.json` is the output of `layoutlmv3_inference.py` and is reused by later semantic mapping and inference steps.
+- `ClimateBERT_Scope/` contains the trained classifier and artifacts used for inference.
