@@ -10,3 +10,7 @@ __pycache__/
 *.pyc
 #Output
 /Output/0_debug_vis/*
+/output/2_Model_Layoutlmv3_Finetune/checkpoint-1000/*
+/output/4_Model_Classification_Scope/checkpoint-2178/*
+/test/*
+/3.Table_Understanding/output/*

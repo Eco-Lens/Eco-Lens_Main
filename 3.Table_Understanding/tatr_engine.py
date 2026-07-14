@@ -6,8 +6,20 @@ from config import TATR_MODEL, TATR_RESIZE, TATR_THRESHOLD
 
 _CLS = {0:"table",1:"table column",2:"table row",3:"table column header",
         4:"table projected row header",5:"table spanning cell"}
+
+
+def _resize_longest_edge(image):
+    width, height = image.size
+    scale = TATR_RESIZE / max(width, height)
+    if scale == 1:
+        return image
+    return image.resize(
+        (max(1, round(width * scale)), max(1, round(height * scale)))
+    )
+
+
 _transform = T.Compose([
-    T.Resize(TATR_RESIZE), T.ToTensor(),
+    T.Lambda(_resize_longest_edge), T.ToTensor(),
     T.Normalize([0.485,0.456,0.406],[0.229,0.224,0.225])
 ])
 

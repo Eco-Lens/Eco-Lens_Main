@@ -17,8 +17,8 @@ from pipeline import run
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 run(
-    ocr_path=os.path.join(BASE, "test", "0_ocr_words.json"),
-    labels_path=os.path.join(BASE, "test", "0_layoutlmv3_labels.json"),
+    ocr_path=os.path.join(BASE, "test", "output", "step1_ocr", "0_ocr_words.json"),
+    labels_path=os.path.join(BASE, "test", "output", "step2_layoutlmv3", "0_layoutlmv3_labels.json"),
     image_root=os.path.join(BASE, "test"),
-    out_dir=os.path.join(os.path.dirname(os.path.abspath(__file__)), "output"),
+    out_dir=os.path.join(BASE, "test", "output", "step3_table_understanding"),
 )

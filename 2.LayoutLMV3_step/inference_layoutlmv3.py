@@ -3,7 +3,7 @@ inference_layoutlmv3.py
 ------------------------
 Load LayoutLMv3 model từ checkpoint fine-tuned.
 Inference bằng LayoutLMv3Processor (image + words + boxes).
-Chunk words thành từng nhóm 60 words (no overlap) để tránh max_length=512.
+Chunk words thành các cửa sổ overlap để tránh max_length=512 và giảm lỗi ở biên chunk.
 
 Cách dùng:
     python "2.LayoutLMV3_step/inference_layoutlmv3.py"
@@ -13,7 +13,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import torch
 import numpy as np
-from collections import Counter
 from PIL import Image
 
 import transformers.utils.generic as generic
@@ -22,11 +21,12 @@ generic.is_tf_available = lambda: False
 from transformers import LayoutLMv3Processor, LayoutLMv3ForTokenClassification
 
 CKPT = os.path.join("Output", "2_Model_Layoutlmv3_Finetune", "checkpoint-1000")
-OCR_JSON = os.path.join("test", "0_ocr_words.json")
-LABEL_OUT = os.path.join("test", "0_layoutlmv3_labels.json")
+OCR_JSON = os.path.join("test", "output", "step1_ocr", "0_ocr_words.json")
+LABEL_OUT = os.path.join("test", "output", "step2_layoutlmv3", "0_layoutlmv3_labels.json")
 IMAGE_DIR = "test"
 
 CHUNK_SIZE = 60
+CHUNK_STRIDE = 30
 MAX_LEN = 512
 
 ID2LABEL = {
@@ -44,6 +44,67 @@ def clean_bbox(bbox, w, h):
     # Normalize to 0-1000
     return [round(1000 * x0 / w), round(1000 * y0 / h),
             round(1000 * x1 / w), round(1000 * y1 / h)]
+
+
+def _chunk_starts(n_words):
+    if n_words <= CHUNK_SIZE:
+        return [0]
+    starts = list(range(0, n_words - CHUNK_SIZE + 1, CHUNK_STRIDE))
+    last_start = n_words - CHUNK_SIZE
+    if starts[-1] != last_start:
+        starts.append(last_start)
+    return starts
+
+
+def _promote_table_header_labels(words, labels):
+    """Recover figure-labelled header groups directly adjacent to table words."""
+    table_indices = [i for i, label in enumerate(labels) if label == "table"]
+    figure_indices = [i for i, label in enumerate(labels) if label == "figure"]
+    if not table_indices or not figure_indices:
+        return labels
+
+    heights = [words[i]["bbox"][3] - words[i]["bbox"][1] for i in table_indices]
+    median_h = max(1, sorted(heights)[len(heights) // 2])
+
+    # Group nearby figure words first so a multi-column header is assessed as a unit.
+    pending = set(figure_indices)
+    groups = []
+    while pending:
+        group = {pending.pop()}
+        changed = True
+        while changed:
+            changed = False
+            for candidate in list(pending):
+                cb = words[candidate]["bbox"]
+                for member in group:
+                    mb = words[member]["bbox"]
+                    x_gap = max(0, max(cb[0], mb[0]) - min(cb[2], mb[2]))
+                    y_gap = max(0, max(cb[1], mb[1]) - min(cb[3], mb[3]))
+                    if x_gap <= median_h * 8 and y_gap <= median_h * 3:
+                        group.add(candidate)
+                        pending.remove(candidate)
+                        changed = True
+                        break
+        groups.append(group)
+
+    for group in groups:
+        boxes = [words[i]["bbox"] for i in group]
+        group_bbox = [
+            min(b[0] for b in boxes), min(b[1] for b in boxes),
+            max(b[2] for b in boxes), max(b[3] for b in boxes),
+        ]
+        adjacent = False
+        for table_index in table_indices:
+            tb = words[table_index]["bbox"]
+            x_gap = max(0, max(group_bbox[0], tb[0]) - min(group_bbox[2], tb[2]))
+            y_gap = max(0, max(group_bbox[1], tb[1]) - min(group_bbox[3], tb[3]))
+            if x_gap <= median_h * 8 and y_gap <= median_h * 4:
+                adjacent = True
+                break
+        if adjacent:
+            for index in group:
+                labels[index] = "table"
+    return labels
 
 
 def main():
@@ -81,12 +142,12 @@ def main():
         texts = [x["text"] for x in words_list]
         bboxes_norm = [clean_bbox(x["bbox"], w, h) for x in words_list]
 
-        # Chunk: CHUNK_SIZE words per chunk, no overlap
-        final_labels = [None] * n_words
-        final_scores = [0.0] * n_words
+        # Average full class probabilities across overlapping windows. This avoids
+        # changing a table header label merely because it lies at index 60/120/...
+        word_probabilities = [[] for _ in range(n_words)]
 
         chunks_info = []
-        for start in range(0, n_words, CHUNK_SIZE):
+        for start in _chunk_starts(n_words):
             end = min(start + CHUNK_SIZE, n_words)
             chunk_words = texts[start:end]
             chunk_boxes = bboxes_norm[start:end]
@@ -109,31 +170,37 @@ def main():
 
             logits = outputs.logits[0]
             probs = torch.softmax(logits, dim=-1)
-            pred_ids = torch.argmax(probs, dim=-1).detach().cpu().numpy()
-            pred_scores_token = torch.max(probs, dim=-1).values.detach().cpu().numpy()
+            probs_np = probs.detach().cpu().numpy()
 
-            # Map token predictions → word (majority vote)
-            word_pred_ids = {}
-            word_pred_scores = {}
+            # Average subword probabilities into each OCR word.
+            word_token_probs = {}
             for token_idx, word_id in enumerate(word_ids):
                 if word_id is None:
                     continue
-                word_pred_ids.setdefault(word_id, []).append(int(pred_ids[token_idx]))
-                word_pred_scores.setdefault(word_id, []).append(float(pred_scores_token[token_idx]))
+                word_token_probs.setdefault(word_id, []).append(probs_np[token_idx])
 
             for local_idx in range(len(chunk_words)):
                 global_idx = start + local_idx
-                if local_idx not in word_pred_ids:
-                    final_labels[global_idx] = "O"
-                    final_scores[global_idx] = 0.0
-                else:
-                    majority_id = Counter(word_pred_ids[local_idx]).most_common(1)[0][0]
-                    final_labels[global_idx] = ID2LABEL.get(majority_id, "O")
-                    final_scores[global_idx] = float(np.mean(word_pred_scores[local_idx]))
+                if local_idx in word_token_probs:
+                    word_probabilities[global_idx].append(
+                        np.mean(word_token_probs[local_idx], axis=0)
+                    )
 
             chunks_info.append({"start": start, "end": end, "num": end - start})
 
-        final_labels = [l if l is not None else "O" for l in final_labels]
+        final_labels = []
+        final_scores = []
+        for predictions in word_probabilities:
+            if not predictions:
+                final_labels.append("O")
+                final_scores.append(0.0)
+                continue
+            averaged = np.mean(predictions, axis=0)
+            label_id = int(np.argmax(averaged))
+            final_labels.append(ID2LABEL.get(label_id, "O"))
+            final_scores.append(float(averaged[label_id]))
+
+        final_labels = _promote_table_header_labels(words_list, final_labels)
 
         n_table = sum(1 for l in final_labels if l in ("table", "table_text"))
         results[img_name] = final_labels

@@ -25,6 +25,7 @@ def main():
     ap.add_argument("--out_json", required=True, help="File output")
     ap.add_argument("--extensions", default=".jpg,.jpeg,.png,.tiff,.bmp", help="Duoi mo rong")
     ap.add_argument("--lang", default="en")
+    ap.add_argument("--gpu", action="store_true", help="Dung GPU (can CUDA)")
     args = ap.parse_args()
 
     exts = [e.strip().lower() for e in args.extensions.split(",")]
@@ -36,6 +37,7 @@ def main():
     for fn in image_names:
         print(f"  - {fn}")
 
+    os.makedirs(os.path.dirname(args.out_json), exist_ok=True)
     state_path = args.out_json + ".ocr_state.json"
     results = {}
     if os.path.exists(state_path):
@@ -53,7 +55,8 @@ def main():
                     del ocr
                     gc.collect()
                 ocr = PaddleOCR( lang=args.lang,
-                                use_angle_cls=False, rec_batch_num=8)
+                                use_angle_cls=False, rec_batch_num=8,
+                                use_gpu=args.gpu)
 
             img_path = os.path.join(args.root, fn)
             if not os.path.exists(img_path):

@@ -6,7 +6,8 @@ import torch; import torchvision
 from config import *
 from utils import (
     merge_bboxes, bbox_area, expand_bbox,
-    split_by_columns, split_by_vertical_gap,
+    split_by_columns, split_by_vertical_gap, split_virtual_panels,
+    merge_row_aligned_groups,
     is_paragraph_cell, is_numeric, is_numeric_lenient, parse_number,
 )
 from tatr_engine import TATREngine
@@ -52,6 +53,7 @@ METRIC_KEYWORDS = {
     "parameter",
     "measure",
     "kpi",
+    "building",
 }
 
 UNIT_KEYWORDS = {
@@ -311,6 +313,118 @@ def detect_columns(header):
 
     return metric_col, unit_col, year_cols
 
+
+def _include_adjacent_table_headers(bbox, table_tokens, words, labels):
+    """Extend a table seed upward to include nearby figure/table_text headers."""
+    heights = [t["bbox"][3] - t["bbox"][1] for t in table_tokens]
+    median_h = max(1, sorted(heights)[len(heights) // 2])
+    candidates = []
+    for word, label in zip(words, labels):
+        if label not in {"figure", "table_text"}:
+            continue
+        wb = word["bbox"]
+        x_overlap = max(0, min(wb[2], bbox[2]) - max(wb[0], bbox[0]))
+        vertical_gap = max(0, bbox[1] - wb[3])
+        if x_overlap > 0 and wb[1] <= bbox[3] and vertical_gap <= median_h * 4:
+            candidates.append(wb)
+    return merge_bboxes([bbox] + candidates) if candidates else bbox
+
+
+def _tokens_inside_crop(words, labels, crop_box):
+    """Use LayoutLMv3 table labels as seeds, then recover OCR by geometry."""
+    tokens = []
+    for index, (word, label) in enumerate(zip(words, labels)):
+        bbox = word["bbox"]
+        center_x = (bbox[0] + bbox[2]) / 2
+        center_y = (bbox[1] + bbox[3]) / 2
+        if not (crop_box[0] <= center_x <= crop_box[2]
+                and crop_box[1] <= center_y <= crop_box[3]):
+            continue
+        tokens.append({
+            "text": word["text"],
+            "label": label,
+            "ocr_index": index,
+            "bbox": [
+                bbox[0] - crop_box[0], bbox[1] - crop_box[1],
+                bbox[2] - crop_box[0], bbox[3] - crop_box[1],
+            ],
+        })
+    return tokens
+
+
+def _region_has_table_header(region):
+    texts = [normalize_text(t["text"]).lower() for t in region["tokens"]]
+    year_count = sum(1 for text in texts if extract_year(text))
+    keyword_count = sum(
+        1 for text in texts
+        if any(keyword in text for keyword in HEADER_KEYWORDS | METRIC_KEYWORDS)
+    )
+    return year_count >= 2 or keyword_count >= 1
+
+
+def _group_continuation_regions(regions, iw, ih):
+    """Join bottom-to-top continuations across virtual pages, retaining segments."""
+    if not regions:
+        return []
+    panel_count = max(r["panel"] for r in regions) + 1
+    panel_width = iw / panel_count
+    groups = [[regions[0]]]
+    for region in regions[1:]:
+        previous = groups[-1][-1]
+        previous_width = (previous["bbox"][2] - previous["bbox"][0]) / panel_width
+        current_width = (region["bbox"][2] - region["bbox"][0]) / panel_width
+        continuation = (
+            region["panel"] == previous["panel"] + 1
+            and previous["bbox"][3] >= ih * 0.75
+            and region["bbox"][1] <= ih * 0.30
+            and _region_has_table_header(previous)
+            and not _region_has_table_header(region)
+            and abs(previous_width - current_width) <= 0.25
+        )
+        if continuation:
+            groups[-1].append(region)
+        else:
+            groups.append([region])
+    return groups
+
+
+def _combine_table_segments(segment_results, page, table_id):
+    max_cols = max(result["cols"] for result in segment_results)
+    table_data = []
+    segments = []
+    for result in segment_results:
+        table_data.extend([
+            row + [""] * (max_cols - len(row))
+            for row in result["table_data"]
+        ])
+        segments.append(result["segment"])
+
+    extracted = _extract_esg(table_data, page=page, table_id=table_id)
+    has_esg = any(
+        keyword in cell.lower()
+        for row in table_data for cell in row for keyword in ESG_KEYWORDS
+    )
+    first = segment_results[0]
+    return {
+        "page": page,
+        "table_id": table_id,
+        # A multipart table has no truthful rectangular union. Keep the first
+        # segment here for legacy consumers and expose all geometry explicitly.
+        "bbox": segments[0]["bbox"],
+        "layout_bbox": segments[0]["bbox"],
+        "crop_bbox": segments[0]["crop_bbox"],
+        "segments": segments,
+        "source_label": TABLE_LABEL,
+        "table_data": table_data,
+        "rows": len(table_data),
+        "cols": max_cols,
+        "extracted_metrics": extracted,
+        "is_esg": has_esg,
+        "tatr_cells": sum(result["tatr_cells"] for result in segment_results),
+        "tatr_time": round(sum(result["tatr_time"] for result in segment_results), 2),
+        "tokens_in_crop": sum(result["tokens_in_crop"] for result in segment_results),
+    }
+
 def run(ocr_path, labels_path, image_root, out_dir):
     os.makedirs(out_dir, exist_ok=True)
     with open(ocr_path, "r", encoding="utf-8") as f:
@@ -327,6 +441,11 @@ def run(ocr_path, labels_path, image_root, out_dir):
 
         words = ocr_data.get(img_name, [])
         labels = label_data.get(img_name, [])
+
+        if len(words) != len(labels):
+            raise ValueError(
+                f"OCR/label length mismatch for {img_name}: {len(words)} != {len(labels)}"
+            )
 
         print("words :", len(words))
         print("labels:", len(labels))
@@ -347,7 +466,12 @@ def run(ocr_path, labels_path, image_root, out_dir):
 
         # Filter table tokens
         table_tokens = [
-            {"text": words[i]["text"], "bbox": words[i]["bbox"]}
+            {
+                "text": words[i]["text"],
+                "bbox": words[i]["bbox"],
+                "label": labels[i],
+                "ocr_index": i,
+            }
             for i in range(min(len(words), len(labels)))
             if labels[i] == TABLE_LABEL
         ]
@@ -367,83 +491,90 @@ def run(ocr_path, labels_path, image_root, out_dir):
             all_results.extend(page_log["regions"])
             continue
         print("MIN:", MIN_TOKENS_PER_REGION)
-        # Step A: Cluster table tokens vertically (separate stacked tables)
-        vertical_clusters = split_by_vertical_gap(table_tokens, ih, VERTICAL_GAP_MULTIPLIER)
+        # Split a two-page spread before vertical clustering. Otherwise rows from
+        # the opposite page fill every vertical gap and unrelated tables merge.
+        panel_groups = split_virtual_panels(table_tokens, iw, ih)
 
-        # Step B: Within each vertical cluster, detect column gaps then build regions
-        # Only table-labeled tokens (label == "table") are used — no all_tokens scan
+        # Build physical table regions inside each virtual page/panel.
         valid_regions = []
-        print("Vertical clusters:", len(vertical_clusters))
+        print("Virtual panels:", len(panel_groups))
         print("Valid regions:", len(valid_regions))
-        for cluster in vertical_clusters:
-            if len(cluster) < MIN_TOKENS_PER_REGION:
-                page_log["skipped"].append({"reason": "too_few_table_tokens", "n": len(cluster)})
-                continue
-
-            col_groups = split_by_columns(cluster, iw, COLUMN_GAP_RATIO)
-
-            for group in col_groups:
-                if len(group) < MIN_TOKENS_PER_REGION:
-                    continue
-
-                bbox = merge_bboxes([t["bbox"] for t in group])
-                crop_box = expand_bbox(bbox, EXPAND_MARGIN, EXPAND_MARGIN, iw, ih)
-
-                # Reject oversized regions (likely leaked into text area)
-                area_ratio = (crop_box[2] - crop_box[0]) * (crop_box[3] - crop_box[1]) / page_area
-                if area_ratio > MAX_TABLE_REGION_AREA_RATIO:
-                    page_log["skipped"].append({"reason": "region_too_large", "bbox": crop_box, "area_ratio": area_ratio})
-                    continue
-
-                # Check numeric content among table tokens only
-                num_inside = sum(1 for t in group if is_numeric_lenient(t["text"]))
-                if num_inside < 2:
-                    page_log["skipped"].append({"reason": "no_numeric_content", "bbox": crop_box})
-                    continue
-
-                valid_regions.append({"bbox": bbox, "crop_box": crop_box, "tokens": group})
-
-        page_log["n_regions"] = len(valid_regions)
-
-        # Process each region
-        for ti, reg in enumerate(valid_regions):
-            crop_box = reg["crop_box"]
-            crop_img = img.crop(crop_box)
-            
-            # Convert table-labeled tokens to crop coordinates
-            # Only tokens with label == "table" are used for cell assignment
-            crop_tokens = []
-            for tok in reg["tokens"]:
-                crop_tokens.append({
-                    "text": tok["text"],
-                    "bbox": [
-                        max(0, tok["bbox"][0] - crop_box[0]),
-                        max(0, tok["bbox"][1] - crop_box[1]),
-                        min(crop_box[2] - crop_box[0], tok["bbox"][2] - crop_box[0]),
-                        min(crop_box[3] - crop_box[1], tok["bbox"][3] - crop_box[1]),
-                    ],
-                })
-
-            if len(crop_tokens) < MIN_TOKENS_PER_REGION:
-                page_log["skipped"].append({"reason": "crop_too_few_tokens", "bbox": crop_box})
-                continue
-
-            result, fail_reason = _process_crop(
-                tatr, crop_img, crop_tokens, reg["bbox"], crop_box,
-                base, ti, page_dir, img
+        for panel_index, panel_tokens in panel_groups:
+            vertical_clusters = split_by_vertical_gap(
+                panel_tokens, ih, VERTICAL_GAP_MULTIPLIER
             )
-            if result:
-                page_results.append(result)
-                page_log["regions"].append({
-                    "table_id": f"table_{ti:02d}",
-                    "bbox": reg["bbox"],
-                    "crop_size": [crop_box[2] - crop_box[0], crop_box[3] - crop_box[1]],
-                    "ocr_words_inside": len(crop_tokens),
-                    "tatr_cells": result.get("tatr_cells", 0),
-                    "output_shape": [result.get("rows", 0), result.get("cols", 0)],
-                })
-            else:
-                page_log["skipped"].append({"reason": "processing_failed", "detail": fail_reason, "bbox": crop_box})
+            for cluster in vertical_clusters:
+                if len(cluster) < MIN_TOKENS_PER_REGION:
+                    page_log["skipped"].append({"reason": "too_few_table_tokens", "n": len(cluster)})
+                    continue
+
+                col_groups = merge_row_aligned_groups(
+                    split_by_columns(cluster, iw, COLUMN_GAP_RATIO)
+                )
+                for group in col_groups:
+                    if len(group) < MIN_TOKENS_PER_REGION:
+                        continue
+
+                    bbox = _include_adjacent_table_headers(
+                        merge_bboxes([t["bbox"] for t in group]),
+                        group, words, labels,
+                    )
+                    crop_box = expand_bbox(bbox, EXPAND_MARGIN, EXPAND_MARGIN, iw, ih)
+
+                    area_ratio = bbox_area(crop_box) / page_area
+                    if area_ratio > MAX_TABLE_REGION_AREA_RATIO:
+                        page_log["skipped"].append({"reason": "region_too_large", "bbox": crop_box, "area_ratio": area_ratio})
+                        continue
+
+                    num_inside = sum(1 for t in group if is_numeric_lenient(t["text"]))
+                    if num_inside < 2:
+                        page_log["skipped"].append({"reason": "no_numeric_content", "bbox": crop_box})
+                        continue
+
+                    valid_regions.append({
+                        "bbox": bbox, "crop_box": crop_box, "tokens": group,
+                        "panel": panel_index,
+                    })
+
+        valid_regions.sort(key=lambda r: (r["panel"], r["bbox"][1], r["bbox"][0]))
+        logical_regions = _group_continuation_regions(valid_regions, iw, ih)
+        page_log["n_regions"] = len(logical_regions)
+
+        # TATR runs on each physical segment, never on the envelope of a
+        # discontinuous continuation table.
+        for ti, region_group in enumerate(logical_regions):
+            table_id = f"table_{ti:02d}"
+            segment_results = []
+            for part_index, reg in enumerate(region_group):
+                crop_box = reg["crop_box"]
+                crop_img = img.crop(crop_box)
+                crop_tokens = _tokens_inside_crop(words, labels, crop_box)
+                artifact_id = table_id if len(region_group) == 1 else f"{table_id}_part_{part_index:02d}"
+
+                if len(crop_tokens) < MIN_TOKENS_PER_REGION:
+                    page_log["skipped"].append({"reason": "crop_too_few_tokens", "bbox": crop_box})
+                    continue
+
+                result, fail_reason = _process_crop(
+                    tatr, crop_img, crop_tokens, reg["bbox"], crop_box,
+                    base, table_id, artifact_id, page_dir, img,
+                )
+                if result:
+                    segment_results.append(result)
+                else:
+                    page_log["skipped"].append({"reason": "processing_failed", "detail": fail_reason, "bbox": crop_box})
+
+            if not segment_results:
+                continue
+            result = _combine_table_segments(segment_results, base, table_id)
+            page_results.append(result)
+            page_log["regions"].append({
+                "table_id": table_id,
+                "segments": result["segments"],
+                "ocr_words_inside": result["tokens_in_crop"],
+                "tatr_cells": result["tatr_cells"],
+                "output_shape": [result["rows"], result["cols"]],
+            })
 
         # Draw all table regions on page overview
         _draw_page_overview(img, page_results, page_dir, base)
@@ -502,12 +633,13 @@ def _merge_overlapping(regions):
     return merged
 
 
-def _process_crop(tatr, crop_img, crop_tokens, raw_bbox, crop_box, base, ti, page_dir, full_img):
+def _process_crop(tatr, crop_img, crop_tokens, raw_bbox, crop_box, base,
+                  table_id, artifact_id, page_dir, full_img):
     if len(crop_tokens) < MIN_TOKENS_PER_REGION:
         return None, "too_few_crop_tokens"
     # DEBUG: luôn lưu crop để xem bằng mắt, kể cả khi fail sau này
     os.makedirs(page_dir, exist_ok=True)
-    crop_img.save(os.path.join(page_dir, f"DEBUG_table_{ti:02d}_crop.jpg"))
+    crop_img.save(os.path.join(page_dir, f"DEBUG_{artifact_id}_crop.jpg"))
 
     t0 = time.time()
     cells = tatr.detect(crop_img)
@@ -529,10 +661,8 @@ def _process_crop(tatr, crop_img, crop_tokens, raw_bbox, crop_box, base, ti, pag
 
     grid = {}
     for tok in crop_tokens:
-        txc = (tok["bbox"][0] + tok["bbox"][2]) / 2
-        tyc = (tok["bbox"][1] + tok["bbox"][3]) / 2
-        ri = _nearest(tyc, rows_sorted, "y")
-        ci = _nearest(txc, cols_sorted, "x")
+        ri = _best_overlap_index(tok["bbox"], rows_sorted, "y")
+        ci = _best_overlap_index(tok["bbox"], cols_sorted, "x")
         if ri is not None and ci is not None:
             grid.setdefault((ri, ci), []).append(tok)
 
@@ -543,44 +673,68 @@ def _process_crop(tatr, crop_img, crop_tokens, raw_bbox, crop_box, base, ti, pag
         row = []
         for ci in range(ncg):
             toks = grid.get((ri, ci), [])
-            toks.sort(key=lambda t: t["bbox"][0])
+            toks.sort(key=lambda t: (
+                round(((t["bbox"][1] + t["bbox"][3]) / 2) / 8),
+                t["bbox"][0],
+            ))
             row.append(" ".join(t["text"] for t in toks).strip())
         table_grid.append(row)
 
     table_grid = _clean_table(table_grid)
+    table_grid = _coalesce_continuation_rows(table_grid)
     if len(table_grid) < MIN_ROWS or len(table_grid[0]) < MIN_COLS:
         return None, f"grid_too_small_after_clean ({len(table_grid)}x{len(table_grid[0]) if table_grid else 0})"
 
     print("Grid:", len(table_grid), len(table_grid[0]))
-    extracted = _extract_esg(table_grid, page=base, table_id=f"table_{ti:02d}")
+    extracted = _extract_esg(table_grid, page=base, table_id=table_id)
     has_data = any(is_numeric(cell) for row in table_grid for cell in row)
     has_esg = any(kw in cell.lower() for row in table_grid for cell in row for kw in ESG_KEYWORDS)
     if not has_data:
         return None, "no_numeric_after_tatr_grid"
 
-    _save_debug_images(full_img, crop_img, cells, crop_box, page_dir, ti, base)
+    _save_debug_images(full_img, crop_img, cells, crop_box, page_dir, artifact_id, base)
 
     return {
-        "page": base, "table_id": f"table_{ti:02d}", "bbox": raw_bbox,
-        "crop_bbox": crop_box, "source_label": TABLE_LABEL,
+        "page": base, "table_id": table_id, "bbox": raw_bbox,
+        "layout_bbox": raw_bbox, "crop_bbox": crop_box, "source_label": TABLE_LABEL,
         "table_data": table_grid, "rows": len(table_grid),
         "cols": len(table_grid[0]) if table_grid else 0,
         "extracted_metrics": extracted, "is_esg": has_esg,
         "tatr_cells": len(cells), "tatr_time": round(det_time, 2),
         "tokens_in_crop": len(crop_tokens),
+        "segment": {
+            "bbox": raw_bbox,
+            "crop_bbox": crop_box,
+            "rows": len(table_grid),
+            "cols": len(table_grid[0]) if table_grid else 0,
+            "artifact_id": artifact_id,
+        },
     }, None
 
 
-def _nearest(coord, items, axis="y"):
-    best_i, best_d = None, float("inf")
+def _bbox_overlap_ratio(a, b):
+    intersection = max(0, min(a[2], b[2]) - max(a[0], b[0])) * max(
+        0, min(a[3], b[3]) - max(a[1], b[1])
+    )
+    area = max(1, (a[2] - a[0]) * (a[3] - a[1]))
+    return intersection / area
+
+
+def _best_overlap_index(token_bbox, items, axis="y"):
+    token_lo, token_hi = ((token_bbox[1], token_bbox[3]) if axis == "y"
+                          else (token_bbox[0], token_bbox[2]))
+    token_size = max(1, token_hi - token_lo)
+    token_center = (token_lo + token_hi) / 2
+    best_i, best_score, best_distance = None, 0.0, float("inf")
     for i, it in enumerate(items):
         lo, hi = (it["bbox"][1], it["bbox"][3]) if axis == "y" else (it["bbox"][0], it["bbox"][2])
-        if lo <= coord <= hi:
-            return i
-        d = min(abs(coord - lo), abs(coord - hi))
-        if d < best_d:
-            best_d, best_i = d, i
-    return best_i
+        score = max(0, min(token_hi, hi) - max(token_lo, lo)) / token_size
+        distance = abs(token_center - (lo + hi) / 2)
+        if score > best_score or (score == best_score and distance < best_distance):
+            best_i, best_score, best_distance = i, score, distance
+    if best_score >= 0.2:
+        return best_i
+    return best_i if best_distance <= token_size else None
 
 
 def _clean_table(grid):
@@ -592,11 +746,13 @@ def _clean_table(grid):
     for row in grid:
         text_cells = [c for c in row if c.strip()]
         if len(text_cells) == 1 and not any(is_numeric_lenient(c) for c in row):
-            text = row[0] if row else ""
+            text = " ".join(text_cells)
             if is_paragraph_cell(text):
                 continue
         cleaned.append(row)
     grid = cleaned
+
+    grid = [row for row in grid if any(cell.strip() for cell in row)]
 
     # Remove trailing empty rows
     while grid and all(not c for c in grid[-1]):
@@ -611,6 +767,79 @@ def _clean_table(grid):
     while ncols > 0 and all(row[ncols - 1] == "" for row in grid):
         ncols -= 1
         grid = [row[:ncols] for row in grid]
+    return grid
+
+
+def _coalesce_continuation_rows(grid):
+    """Merge physical OCR/TATR rows that belong to one logical table row."""
+    if len(grid) < 3:
+        return grid
+
+    key_col = None
+    header_row = None
+    key_headers = METRIC_KEYWORDS | {"name", "building"}
+    for ri, row in enumerate(grid[:4]):
+        for ci, cell in enumerate(row):
+            normalized = normalize_text(cell).lower()
+            if any(keyword in normalized for keyword in key_headers):
+                key_col = ci
+                header_row = ri
+                break
+        if key_col is not None:
+            break
+    if key_col is None:
+        return grid
+
+    def merge_cells(target, source, prepend=False):
+        for ci, value in enumerate(source):
+            value = value.strip()
+            if not value:
+                continue
+            if target[ci].strip():
+                parts = (value, target[ci]) if prepend else (target[ci], value)
+                target[ci] = " ".join(parts).strip()
+            else:
+                target[ci] = value
+
+    row_index = header_row + 1
+    while row_index < len(grid):
+        row = grid[row_index]
+        key = row[key_col].strip()
+        previous = grid[row_index - 1] if row_index > header_row + 1 else None
+        following = grid[row_index + 1] if row_index + 1 < len(grid) else None
+
+        if not key:
+            nonempty = [ci for ci, cell in enumerate(row) if cell.strip()]
+            location_only = nonempty and all(ci < key_col for ci in nonempty)
+            continues_following_text = bool(following and following[key_col].strip()) and any(
+                row[ci].strip() and following[ci].strip()
+                and not is_numeric_lenient(row[ci])
+                and not is_numeric_lenient(following[ci])
+                for ci in range(len(row))
+            )
+            if following and (location_only or continues_following_text):
+                merge_cells(following, row, prepend=True)
+                grid.pop(row_index)
+                continue
+            if previous and previous[key_col].strip():
+                merge_cells(previous, row)
+                grid.pop(row_index)
+                continue
+
+        value_cells = row[key_col + 1:]
+        previous_key = previous[key_col].strip() if previous else ""
+        is_text_continuation = (
+            previous_key.count("(") > previous_key.count(")")
+            or previous_key.endswith(("-", ",", "/"))
+            or (key[:1].islower() if key else False)
+        )
+        if (key and not any(cell.strip() for cell in value_cells)
+                and previous_key and is_text_continuation):
+            merge_cells(previous, row)
+            grid.pop(row_index)
+            continue
+
+        row_index += 1
     return grid
 
 
@@ -658,7 +887,10 @@ def _extract_esg(table_grid, page, table_id, report_year=None):
             value = clean_metric(cell)
             if not is_number(value):
                 continue
-            value = float(value.replace(",", ""))
+            parsed = parse_number(value)
+            if parsed is None:
+                continue
+            value = parsed
             text = metric.lower()
             metrics.append({
                 "metric_id": f"{table_id}_0_{ci}",
@@ -673,11 +905,19 @@ def _extract_esg(table_grid, page, table_id, report_year=None):
         return metrics
 
     header_row = detect_header_row(table_grid)
-    metric_col, unit_col, year_cols = detect_columns(table_grid[header_row])
+    column_header_row = next((
+        ri for ri, row in enumerate(table_grid[:4])
+        if any(
+            any(keyword in normalize_text(cell).lower() for keyword in METRIC_KEYWORDS)
+            for cell in row
+        )
+    ), header_row)
+    metric_col, unit_col, year_cols = detect_columns(table_grid[column_header_row])
+    data_start_row = max(header_row, column_header_row) + 1
 
     # --- FALLBACK 1: quét nhiều dòng header thay vì chỉ 1 dòng ---
     if not year_cols:
-        year_cols = _extract_year_column_map(table_grid, header_rows=header_row + 1)
+        year_cols = _extract_year_column_map(table_grid, header_rows=data_start_row)
 
     # --- FALLBACK 2: bảng chỉ có 1 giá trị/năm (không ghi năm trong bảng) ---
     # Thay vì bỏ toàn bộ bảng, coi mọi cột số (trừ metric_col, unit_col) là
@@ -692,7 +932,7 @@ def _extract_esg(table_grid, page, table_id, report_year=None):
             if ci != metric_col and ci != unit_col
         }
 
-    for ri in range(header_row + 1, len(table_grid)):
+    for ri in range(data_start_row, len(table_grid)):
         row = table_grid[ri]
         if metric_col >= len(row):
             continue
@@ -711,7 +951,10 @@ def _extract_esg(table_grid, page, table_id, report_year=None):
             value = clean_metric(row[ci])
             if not is_number(value):
                 continue
-            value = float(value.replace(",", ""))
+            parsed = parse_number(value)
+            if parsed is None:
+                continue
+            value = parsed
 
             key = (metric.lower(), year, value, ci)
             if key in seen:
@@ -740,7 +983,8 @@ def _extract_esg(table_grid, page, table_id, report_year=None):
     return metrics
 
 def _draw_ocr_vis(img, words, page_dir, base):
-    draw = ImageDraw.Draw(img)
+    vis = img.copy()
+    draw = ImageDraw.Draw(vis)
     try:
         font = ImageFont.truetype("arial.ttf", 14)
     except:
@@ -755,7 +999,7 @@ def _draw_ocr_vis(img, words, page_dir, base):
         tb = draw.textbbox((b[0], ty), txt, font=font)
         draw.rectangle(tb, fill=(255, 255, 200))
         draw.text((b[0], ty), txt, fill=(0, 0, 0), font=font)
-    img.save(os.path.join(page_dir, f"{base}_ocr.jpg"))
+    vis.save(os.path.join(page_dir, f"{base}_ocr.jpg"))
 
 
 _LABEL_COLORS = {
@@ -767,7 +1011,8 @@ _LABEL_COLORS = {
 
 
 def _draw_layoutlmv3_vis(img, words, labels, page_dir, base):
-    draw = ImageDraw.Draw(img)
+    vis = img.copy()
+    draw = ImageDraw.Draw(vis)
     try:
         font = ImageFont.truetype("arial.ttf", 14)
     except:
@@ -781,7 +1026,7 @@ def _draw_layoutlmv3_vis(img, words, labels, page_dir, base):
         tb = draw.textbbox((b[0], ty), label, font=font)
         draw.rectangle(tb, fill=color)
         draw.text((b[0], ty), label, fill=(0, 0, 0), font=font)
-    img.save(os.path.join(page_dir, f"{base}_layoutlmv3.jpg"))
+    vis.save(os.path.join(page_dir, f"{base}_layoutlmv3.jpg"))
 
 
 def _draw_page_overview(full_img, page_results, page_dir, base):
@@ -794,21 +1039,23 @@ def _draw_page_overview(full_img, page_results, page_dir, base):
     colors = [(255, 0, 0), (0, 180, 0), (0, 0, 255), (255, 180, 0), (180, 0, 255), (0, 180, 180)]
     for ti, r in enumerate(page_results):
         col = colors[ti % len(colors)]
-        cb = r["crop_bbox"]
-        draw.rectangle(cb, outline=col, width=3)
-        label = f"table_{ti:02d}"
-        draw.text((cb[0] + 4, max(0, cb[1] - 20)), label, fill=col, font=font)
+        for part_index, segment in enumerate(r.get("segments", [])):
+            bbox = segment["bbox"]
+            draw.rectangle(bbox, outline=col, width=3)
+            suffix = f" part {part_index + 1}" if len(r["segments"]) > 1 else ""
+            label = f"{r['table_id']}{suffix}"
+            draw.text((bbox[0] + 4, max(0, bbox[1] - 20)), label, fill=col, font=font)
     vis.save(os.path.join(page_dir, f"{base}_page_with_table_bboxes.jpg"))
 
 
-def _save_debug_images(full_img, crop_img, tatr_cells, crop_box, page_dir, ti, base):
+def _save_debug_images(full_img, crop_img, tatr_cells, crop_box, page_dir, artifact_id, base):
     try:
         font = ImageFont.truetype("arial.ttf", 11)
     except:
         font = ImageFont.load_default()
 
     # Crop image
-    crop_img.save(os.path.join(page_dir, f"table_{ti:02d}_crop.jpg"))
+    crop_img.save(os.path.join(page_dir, f"{artifact_id}_crop.jpg"))
 
     # TATR overlay on crop
     vis2 = crop_img.copy()
@@ -822,7 +1069,7 @@ def _save_debug_images(full_img, crop_img, tatr_cells, crop_box, page_dir, ti, b
         col = colors.get(c["class_name"], (128, 128, 128))
         draw2.rectangle(c["bbox"], outline=col, width=2)
         draw2.rectangle(c["bbox"], fill=col + (20,))
-    vis2.save(os.path.join(page_dir, f"table_{ti:02d}_tatr_overlay.jpg"))
+    vis2.save(os.path.join(page_dir, f"{artifact_id}_tatr_overlay.jpg"))
 
 
 def _export_page_html(results, page_dir, base):
@@ -860,6 +1107,14 @@ def _export_page_html(results, page_dir, base):
                 f"<td>{'ESG' if m.get('is_esg') else ''}</td></tr>"
             )
 
+        segment_images = "".join(
+            f'<div><img src="{segment["artifact_id"]}_crop.jpg">'
+            f'<div class="img-label">Table segment {index + 1}</div></div>'
+            f'<div><img src="{segment["artifact_id"]}_tatr_overlay.jpg">'
+            f'<div class="img-label">TATR segment {index + 1}</div></div>'
+            for index, segment in enumerate(r.get("segments", []))
+        )
+
         html = f"""<!DOCTYPE html><html><head><meta charset='utf-8'><style>
 body{{font-family:'Segoe UI',sans-serif;margin:20px;background:#f0f2f4}}
 h2{{color:#1a1a2e}}
@@ -879,8 +1134,7 @@ td{{border:1px solid #ddd;padding:4px 8px;white-space:nowrap;max-width:250px;ove
 <h2>{base} — Table {int(tid.split('_')[1])+1}</h2>
 <p>{nr}r x {nc}c, {nm} metrics{' (ESG)' if r.get('is_esg') else ''} | {r['tatr_cells']} TATR cells</p>
 <div class='img-row'>
-<div><img src='table_{int(tid.split('_')[1]):02d}_crop.jpg'><div class="img-label">3. Table crop</div></div>
-<div><img src='table_{int(tid.split('_')[1]):02d}_tatr_overlay.jpg'><div class="img-label">4. TATR structure</div></div>
+{segment_images}
 </div>
 <h3>Table Grid</h3>
 <div class='tw'><table><tr><td class='ch'>#</td>{"".join(f'<td class="ch">C{ci}</td>' for ci in range(nc))}</tr>
