@@ -8,7 +8,7 @@ Chunk words thành các cửa sổ overlap để tránh max_length=512 và lỗi
 Cách dùng:
     python "4.SemanticMapping/layoutlmv3_inference.py"
 """
-import sys, os, json, time
+import sys, os, json, time, re
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import torch
@@ -218,7 +218,12 @@ def merge_lines_to_paragraphs(lines, line_gap_ratio=0.9, indent_ratio=0.04):
 
         prev_text = " ".join(w["text"] for w in sorted(prev, key=lambda x: x["bbox"][0])).strip()
         line_text = " ".join(w["text"] for w in sorted(line, key=lambda x: x["bbox"][0])).strip()
-        explicit_start = line_text.startswith((">", "•", "- "))
+        explicit_scope_start = re.match(
+            r"^[\s:;,.•·\-–—>*]*scope\s*[123]\b",
+            line_text,
+            re.IGNORECASE,
+        )
+        explicit_start = line_text.startswith((">", "•", "- ")) or explicit_scope_start
         completed_sentence = prev_text.endswith((".", "!", "?", ":"))
         paragraph_break = explicit_start or (completed_sentence and gap > typical_gap + 1)
 

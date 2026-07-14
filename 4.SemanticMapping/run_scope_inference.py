@@ -34,11 +34,24 @@ Y_PROXIMITY = 150
 
 TEXT_SCOPE_CONFIDENCE = 0.60
 ALLOWED_UNIT_PATTERNS = [
+    ("tCO2e", r"(?:t|tons?|tonnes?|metric\s+tons?)\s*(?:of\s*)?CO(?:2|₂|,)\s*(?:e|equivalent)?"),
+    ("kgCO2e", r"kg\s*CO(?:2|₂)\s*(?:e|equivalent)?"),
     ("tCO2", r"t\s*CO(?:2|₂)"),
     ("ppm", r"ppm"),
     ("CO2e", r"CO(?:2|₂)\s*e"),
     ("mg/m3", r"mg\s*/\s*m(?:3|³)"),
+    ("%", r"%|percent(?:age)?"),
+    ("MWh", r"MWh"),
+    ("kWh", r"kWh"),
+    ("GWh", r"GWh"),
+    ("GJ", r"GJ"),
 ]
+
+ESG_SCOPE_CONTEXT = re.compile(
+    r"\b(?:greenhouse\s+gas|ghg|emissions?|carbon|CO(?:2|₂)e?|electricity|"
+    r"fuel|refrigerant|supply\s+chain|value\s+chain|net\s+zero|climate)\b",
+    re.IGNORECASE,
+)
 
 
 def parse_number(s):
@@ -62,13 +75,89 @@ def extract_value_unit(text):
     number_pattern = r"([+-]?\d+(?:,\d{3})*(?:\.\d+)?)"
     for unit, unit_pattern in ALLOWED_UNIT_PATTERNS:
         pattern = rf"(?<![\w.]){number_pattern}\s*(?:[-–—]\s*)?(?:{unit_pattern})(?![\w])"
-        match = re.search(pattern, text, re.IGNORECASE)
-        if not match:
-            continue
-        value = parse_number(match.group(1))
-        if value is not None and value > 0 and not _is_year(value):
-            return value, unit
+        for match in re.finditer(pattern, text, re.IGNORECASE):
+            value = parse_number(match.group(1))
+            if value is not None:
+                return value, unit
     return None, None
+
+
+def extract_explicit_scopes(text):
+    """Return unique scope labels explicitly named in text."""
+    scope_ids = {
+        int(match.group(1))
+        for match in re.finditer(r"\bscope\s*([123])\b", text or "", re.IGNORECASE)
+    }
+    return [f"Scope {scope_id}" for scope_id in sorted(scope_ids)]
+
+
+def resolve_text_scope(text, prediction, value=None, unit=None):
+    """Combine model output with explicit labels and ESG evidence without hiding it."""
+    resolved = dict(prediction)
+    model_scope = prediction["scope"]
+    model_confidence = prediction["confidence"]
+    explicit_scopes = extract_explicit_scopes(text)
+    has_measurement = value is not None and unit is not None
+    has_esg_context = bool(ESG_SCOPE_CONTEXT.search(text or ""))
+
+    resolved.update({
+        "model_scope": model_scope,
+        "model_confidence": model_confidence,
+        "explicit_scopes": explicit_scopes,
+        "has_measurement": has_measurement,
+    })
+
+    if len(explicit_scopes) > 1:
+        resolved.update({
+            "scope": "Mixed",
+            "scope_id": -1,
+            "confidence": 1.0,
+            "scope_source": "explicit_mentions",
+            "decision_reason": "multiple_explicit_scopes",
+        })
+        return resolved
+
+    if len(explicit_scopes) == 1:
+        explicit_scope = explicit_scopes[0]
+        resolved.update({
+            "scope": explicit_scope,
+            "scope_id": int(explicit_scope[-1]),
+            "confidence": 1.0,
+            "scope_source": "explicit_mention",
+            "decision_reason": "single_explicit_scope",
+        })
+        return resolved
+
+    if model_scope == "Other":
+        resolved.update({
+            "scope_source": "model",
+            "decision_reason": "model_predicted_other",
+        })
+        return resolved
+
+    if model_confidence > TEXT_SCOPE_CONFIDENCE and has_esg_context:
+        resolved.update({
+            "scope_source": (
+                "model_with_measurement_and_esg_context"
+                if has_measurement else "model_with_esg_context"
+            ),
+            "decision_reason": "supported_non_other_prediction",
+        })
+        return resolved
+
+    rejection_reasons = []
+    if model_confidence <= TEXT_SCOPE_CONFIDENCE:
+        rejection_reasons.append("low_confidence")
+    if not has_esg_context:
+        rejection_reasons.append("missing_esg_evidence")
+    resolved.update({
+        "scope": "Other",
+        "scope_id": 0,
+        "confidence": round(prediction["probabilities"]["Other"], 4),
+        "scope_source": "policy_filter",
+        "decision_reason": ",".join(rejection_reasons),
+    })
+    return resolved
 
 
 def load_model():
@@ -170,7 +259,11 @@ def classify_table_via_content(table_data, tokenizer, model):
     _, _, combined = extract_table_content(table_data)
     if not combined or len(combined) < 5:
         return None
-    return predict_scope(combined, tokenizer, model)
+    prediction = predict_scope(combined, tokenizer, model)
+    if prediction is None:
+        return None
+    value, unit = extract_value_unit(combined)
+    return resolve_text_scope(combined, prediction, value, unit)
 
 
 def classify_table_rows(table_data, tokenizer, model):
@@ -196,7 +289,15 @@ def classify_table_rows(table_data, tokenizer, model):
         text = " ".join(context_parts)
         pred = predict_scope(text, tokenizer, model)
         if pred:
-            results.append({"row": ri, "label": label, "scope": pred["scope"], "confidence": pred["confidence"]})
+            value, unit = extract_value_unit(text)
+            resolved = resolve_text_scope(text, pred, value, unit)
+            results.append({
+                "row": ri,
+                "label": label,
+                "scope": resolved["scope"],
+                "confidence": resolved["confidence"],
+                "scope_source": resolved["scope_source"],
+            })
     return results
 
 
@@ -227,9 +328,23 @@ def match_tables_to_blocks(tables_data, block_preds, layout_data, tokenizer, mod
             bbox_px = t.get("bbox") or t.get("layout_bbox")
             bbox_norm = normalize_bbox(bbox_px, *img_size) if img_size else None
             content_pred = classify_table_via_content(t.get("table_data", []), tokenizer, model)
-            scope = content_pred["scope"] if content_pred else "Other"
-            confidence = content_pred["confidence"] if content_pred else 0.0
-            source = "table_content" if content_pred else "unresolved"
+            row_scopes = classify_table_rows(t.get("table_data", []), tokenizer, model)
+            supported_rows = [row for row in row_scopes if row["scope"] != "Other"]
+            distinct_scopes = sorted({row["scope"] for row in supported_rows})
+
+            if len(distinct_scopes) > 1:
+                scope = "Mixed"
+                confidence = min(row["confidence"] for row in supported_rows)
+                source = "table_rows"
+            elif len(distinct_scopes) == 1:
+                scope = distinct_scopes[0]
+                matching_rows = [row for row in supported_rows if row["scope"] == scope]
+                confidence = sum(row["confidence"] for row in matching_rows) / len(matching_rows)
+                source = "table_rows"
+            else:
+                scope = content_pred["scope"] if content_pred else "Other"
+                confidence = content_pred["confidence"] if content_pred else 0.0
+                source = "table_content" if content_pred else "unresolved"
 
             table_results.append({
                 "page": page_name,
@@ -247,7 +362,7 @@ def match_tables_to_blocks(tables_data, block_preds, layout_data, tokenizer, mod
                 "scope_source": source,
                 "section_title": None,
                 "nearby_text": [],
-                "row_scopes": [],
+                "row_scopes": row_scopes,
             })
 
     return table_results
@@ -279,20 +394,12 @@ def main():
             text = block.get("text", "").strip()
             if not text or len(text) < 5:
                 continue
-            pred = predict_scope(text, tokenizer, model)
-            if pred is None:
+            model_pred = predict_scope(text, tokenizer, model)
+            if model_pred is None:
                 continue
 
             value, unit = extract_value_unit(text)
-
-            # Text/figure scope requires a high-confidence supported measurement.
-            if pred["scope"] != "Other":
-                has_value = isinstance(value, (int, float)) and value > 0
-                has_allowed_unit = unit in {name for name, _ in ALLOWED_UNIT_PATTERNS}
-                if pred["confidence"] <= TEXT_SCOPE_CONFIDENCE or not has_value or not has_allowed_unit:
-                    pred["scope"] = "Other"
-                    pred["scope_id"] = 0
-                    pred["confidence"] = round(pred["probabilities"]["Other"], 4)
+            pred = resolve_text_scope(text, model_pred, value, unit)
 
             block_preds.append({
                 "page": img_name,
