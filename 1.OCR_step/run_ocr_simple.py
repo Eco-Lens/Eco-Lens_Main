@@ -1,15 +1,10 @@
 """
-run_ocr_simple.py
-PaddleOCR word-level truc tiep tren thu muc anh, khong can file annotation.
+run_ocr_simple.py — PaddleOCR word-level extraction.
 
-Cach dung:
-    python "1.OCR_step/run_ocr_simple.py" --root "test" --out_json "test/0_ocr_words.json"
+Usage:
+    python run_ocr_simple.py --image-dir runs/{run_id}/pages --out-json runs/{run_id}/output/step1_ocr/ocr_words.json
 """
-import argparse
-import gc
-import glob
-import json
-import os
+import argparse, gc, glob, json, os, sys, traceback
 from paddleocr import PaddleOCR
 
 
@@ -20,32 +15,37 @@ def quad_to_bbox(quad_pts):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="PaddleOCR word-level (khong can COCO)")
-    ap.add_argument("--root", required=True, help="Thu muc chua anh")
-    ap.add_argument("--out_json", required=True, help="File output")
-    ap.add_argument("--extensions", default=".jpg,.jpeg,.png,.tiff,.bmp", help="Duoi mo rong")
+    ap = argparse.ArgumentParser(description="PaddleOCR word-level extraction")
+    ap.add_argument("--image-dir", required=True, help="Directory containing page images")
+    ap.add_argument("--out-json", required=True, help="Output JSON path")
+    ap.add_argument("--extensions", default=".jpg,.jpeg,.png", help="Image file extensions")
     ap.add_argument("--lang", default="en")
-    ap.add_argument("--gpu", action="store_true", help="Dung GPU (can CUDA)")
+    ap.add_argument("--gpu", action="store_true", help="Use GPU")
+    ap.add_argument("--resume", action="store_true", help="Resume from previous state")
     args = ap.parse_args()
 
     exts = [e.strip().lower() for e in args.extensions.split(",")]
-    image_paths = sorted(glob.glob(os.path.join(args.root, "*")))
-    image_files = [p for p in image_paths if os.path.splitext(p)[1].lower() in exts]
+    image_files = sorted(
+        p for p in glob.glob(os.path.join(args.image_dir, "*"))
+        if os.path.splitext(p)[1].lower() in exts
+    )
     image_names = sorted(os.path.basename(p) for p in image_files)
 
-    print(f"Tim thay {len(image_names)} anh trong {args.root}")
+    print(f"Found {len(image_names)} images in {args.image_dir}")
     for fn in image_names:
         print(f"  - {fn}")
 
     os.makedirs(os.path.dirname(args.out_json), exist_ok=True)
     state_path = args.out_json + ".ocr_state.json"
     results = {}
-    if os.path.exists(state_path):
+
+    if args.resume and os.path.exists(state_path):
         with open(state_path, "r", encoding="utf-8") as f:
             results = json.load(f)
+        print(f"Resuming: {len(results)} already done")
 
     remaining = [fn for fn in image_names if fn not in results]
-    print(f"\nDa xong: {len(results)}, con lai: {len(remaining)}")
+    print(f"Remaining: {len(remaining)}")
 
     if remaining:
         ocr = None
@@ -54,16 +54,23 @@ def main():
                 if ocr is not None:
                     del ocr
                     gc.collect()
-                ocr = PaddleOCR( lang=args.lang,
-                                use_angle_cls=False, rec_batch_num=8,
-                                use_gpu=args.gpu)
+                ocr = PaddleOCR(lang=args.lang, use_angle_cls=False,
+                               rec_batch_num=8, use_gpu=args.gpu)
 
-            img_path = os.path.join(args.root, fn)
+            img_path = os.path.join(args.image_dir, fn)
             if not os.path.exists(img_path):
+                print(f"  Skipping {fn}: file not found")
                 results[fn] = []
                 continue
 
-            ocr_result = ocr.ocr(img_path)
+            try:
+                ocr_result = ocr.ocr(img_path)
+            except Exception as e:
+                print(f"  Error OCR processing {fn}: {e}")
+                traceback.print_exc()
+                results[fn] = []
+                continue
+
             words = []
             page = ocr_result[0] if ocr_result and ocr_result[0] is not None else []
             for line in page:
@@ -74,17 +81,22 @@ def main():
 
             if i % 20 == 0 or i == len(remaining):
                 tmp = state_path + ".tmp"
+                os.makedirs(os.path.dirname(tmp), exist_ok=True)
                 with open(tmp, "w", encoding="utf-8") as f:
                     json.dump(results, f, ensure_ascii=False)
                 os.replace(tmp, state_path)
                 gc.collect()
 
-    with open(args.out_json, "w", encoding="utf-8") as f:
+    # Atomic write
+    tmp_out = args.out_json + ".tmp"
+    os.makedirs(os.path.dirname(tmp_out), exist_ok=True)
+    with open(tmp_out, "w", encoding="utf-8") as f:
         json.dump(results, f, ensure_ascii=False)
+    os.replace(tmp_out, args.out_json)
 
     n_empty = sum(1 for v in results.values() if len(v) == 0)
-    print(f"\nHoan tat. Output: {args.out_json}")
-    print(f"Anh khong co chu: {n_empty}")
+    print(f"Done. Output: {args.out_json}")
+    print(f"Empty pages: {n_empty}")
 
 
 if __name__ == "__main__":

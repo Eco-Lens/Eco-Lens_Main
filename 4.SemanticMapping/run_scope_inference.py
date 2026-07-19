@@ -1,16 +1,17 @@
 """
-run_scope_inference.py
----------------------
-Load fine-tuned ClimateBERT Scope classifier.
-Classify text/figure blocks, then assign scope to tables by:
-  1. Classifying table content (headers + row labels) directly
-  2. Checking nearby classified text blocks for context
-  3. Combining both signals for robust table scope
+run_scope_inference.py — ClimateBERT Scope classification.
+
+Loads fine-tuned ClimateBERT, classifies text/figure blocks and tables.
 
 Usage:
-    python "4.SemanticMapping/run_scope_inference.py"
+    python "4.SemanticMapping/run_scope_inference.py" \\
+        --layout-json .../0_layoutlmv3_layout.json \\
+        --tables-json .../all_tables.json \\
+        --image-dir .../pages \\
+        --out-dir .../step4_semantic_mapping
 """
-import sys, os, json, time, re, hashlib
+import sys, os, json, time, re, hashlib, argparse
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import torch
@@ -20,19 +21,13 @@ from collections import Counter
 from PIL import Image
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
-CKPT = os.path.join("Output", "4_Model_Classification_Scope", "checkpoint-2178")
-LAYOUT_JSON = os.path.join("test", "output", "step4_semantic_mapping", "0_layoutlmv3_layout.json")
-TABLES_JSON = os.path.join("test", "output", "step3_table_understanding", "all_tables.json")
-IMAGE_DIR = "test"
-OUT_DIR = os.path.join("test", "output", "step4_semantic_mapping")
+from pipeline_core.config import CLIMATEBERT_TEMPERATURE, SCOPE_NAMES, SCHEMA_VERSION
+from pipeline_core.utils import atomic_write_json, read_json_safe
 
 MAX_LENGTH = 256
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-TEMPERATURE = 5.0
-ID2LABEL = {0: "Other", 1: "Scope 1", 2: "Scope 2", 3: "Scope 3"}
-Y_PROXIMITY = 150
-
 TEXT_SCOPE_CONFIDENCE = 0.60
+
 ALLOWED_UNIT_PATTERNS = [
     ("tCO2e", r"(?:t|tons?|tonnes?|metric\s+tons?)\s*(?:of\s*)?CO(?:2|₂|,)\s*(?:e|equivalent)?"),
     ("kgCO2e", r"kg\s*CO(?:2|₂)\s*(?:e|equivalent)?"),
@@ -64,11 +59,6 @@ def parse_number(s):
         return None
 
 
-def _is_year(num):
-    """Heuristic: 4-digit number between 1900-2099 is likely a year."""
-    return 1900 <= num <= 2099
-
-
 def extract_value_unit(text):
     if not text:
         return None, None
@@ -83,7 +73,6 @@ def extract_value_unit(text):
 
 
 def extract_explicit_scopes(text):
-    """Return unique scope labels explicitly named in text."""
     scope_ids = {
         int(match.group(1))
         for match in re.finditer(r"\bscope\s*([123])\b", text or "", re.IGNORECASE)
@@ -91,8 +80,21 @@ def extract_explicit_scopes(text):
     return [f"Scope {scope_id}" for scope_id in sorted(scope_ids)]
 
 
+def is_esg_eligible(text):
+    """Semantic eligibility gate: True if text has ESG relevance."""
+    if not text or len(text.strip()) < 3:
+        return False
+    if extract_explicit_scopes(text):
+        return True
+    if ESG_SCOPE_CONTEXT.search(text):
+        return True
+    value, unit = extract_value_unit(text)
+    if value is not None and unit is not None:
+        return True
+    return False
+
+
 def resolve_text_scope(text, prediction, value=None, unit=None):
-    """Combine model output with explicit labels and ESG evidence without hiding it."""
     resolved = dict(prediction)
     model_scope = prediction["scope"]
     model_confidence = prediction["confidence"]
@@ -109,39 +111,49 @@ def resolve_text_scope(text, prediction, value=None, unit=None):
 
     if len(explicit_scopes) > 1:
         resolved.update({
-            "scope": "Mixed",
-            "scope_id": -1,
-            "confidence": 1.0,
+            "scope": "Mixed", "scope_id": -1, "confidence": 1.0,
             "scope_source": "explicit_mentions",
             "decision_reason": "multiple_explicit_scopes",
+            "scope_evidence": text[:300],
         })
         return resolved
 
     if len(explicit_scopes) == 1:
         explicit_scope = explicit_scopes[0]
         resolved.update({
-            "scope": explicit_scope,
-            "scope_id": int(explicit_scope[-1]),
-            "confidence": 1.0,
-            "scope_source": "explicit_mention",
+            "scope": explicit_scope, "scope_id": int(explicit_scope[-1]),
+            "confidence": 1.0, "scope_source": "explicit_mention",
             "decision_reason": "single_explicit_scope",
+            "scope_evidence": text[:300],
         })
         return resolved
 
     if model_scope == "Other":
         resolved.update({
-            "scope_source": "model",
-            "decision_reason": "model_predicted_other",
+            "scope_source": "model", "decision_reason": "model_predicted_other",
+            "scope_evidence": None,
         })
         return resolved
 
-    if model_confidence > TEXT_SCOPE_CONFIDENCE and has_esg_context:
+    # Non-Other model prediction: require ESG eligibility
+    if not is_esg_eligible(text):
+        resolved.update({
+            "scope": "Other", "scope_id": 0,
+            "confidence": round(prediction["probabilities"]["Other"], 4),
+            "scope_source": "eligibility_gate",
+            "decision_reason": "not_esg_eligible",
+            "scope_evidence": None,
+        })
+        return resolved
+
+    if model_confidence > TEXT_SCOPE_CONFIDENCE:
         resolved.update({
             "scope_source": (
                 "model_with_measurement_and_esg_context"
                 if has_measurement else "model_with_esg_context"
             ),
             "decision_reason": "supported_non_other_prediction",
+            "scope_evidence": text[:300],
         })
         return resolved
 
@@ -151,26 +163,26 @@ def resolve_text_scope(text, prediction, value=None, unit=None):
     if not has_esg_context:
         rejection_reasons.append("missing_esg_evidence")
     resolved.update({
-        "scope": "Other",
-        "scope_id": 0,
+        "scope": "Other", "scope_id": 0,
         "confidence": round(prediction["probabilities"]["Other"], 4),
         "scope_source": "policy_filter",
         "decision_reason": ",".join(rejection_reasons),
+        "scope_evidence": None,
     })
     return resolved
 
 
-def load_model():
+def load_model(ckpt):
     print("Loading ClimateBERT Scope classifier...")
-    tokenizer = AutoTokenizer.from_pretrained(CKPT)
-    model = AutoModelForSequenceClassification.from_pretrained(CKPT)
+    tokenizer = AutoTokenizer.from_pretrained(ckpt)
+    model = AutoModelForSequenceClassification.from_pretrained(ckpt)
     model.to(DEVICE)
     model.eval()
     print(f"  Loaded on {DEVICE}")
     return tokenizer, model
 
 
-def predict_scope(text, tokenizer, model, temperature=TEMPERATURE):
+def predict_scope(text, tokenizer, model, temperature=CLIMATEBERT_TEMPERATURE):
     if not text or len(text.strip()) < 3:
         return None
     inputs = tokenizer(
@@ -183,10 +195,10 @@ def predict_scope(text, tokenizer, model, temperature=TEMPERATURE):
         probs = F.softmax(logits, dim=-1)[0]
     pred_id = torch.argmax(probs).item()
     return {
-        "scope": ID2LABEL[pred_id],
+        "scope": SCOPE_NAMES[pred_id],
         "scope_id": pred_id,
         "confidence": round(float(probs[pred_id]), 4),
-        "probabilities": {ID2LABEL[i]: round(float(probs[i]), 4) for i in range(len(probs))},
+        "probabilities": {SCOPE_NAMES[i]: round(float(probs[i]), 4) for i in range(len(probs))},
     }
 
 
@@ -207,9 +219,9 @@ def table_fingerprint(table):
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
-def get_image_size(page_name):
+def get_image_size(page_name, image_dir):
     for ext in [".jpg", ".jpeg", ".png"]:
-        path = os.path.join(IMAGE_DIR, page_name + ext)
+        path = os.path.join(image_dir, page_name + ext)
         if os.path.exists(path):
             with Image.open(path) as img:
                 return img.size
@@ -225,22 +237,9 @@ def normalize_bbox(bbox_px, w, h):
     ]
 
 
-def bbox_center_y(bbox):
-    return (bbox[1] + bbox[3]) / 2
-
-
-def bbox_x_overlap(a, b):
-    return max(0, min(a[2], b[2]) - max(a[0], b[0]))
-
-
 def extract_table_content(table_data):
-    """
-    Extract textual content from a table for scope classification.
-    Returns: headers text, row labels text, combined text.
-    """
     if not table_data:
         return "", "", ""
-
     cells = []
     for row in table_data:
         for cell in row:
@@ -252,10 +251,6 @@ def extract_table_content(table_data):
 
 
 def classify_table_via_content(table_data, tokenizer, model):
-    """
-    Classify table by its headers, row labels, and optional section title.
-    section_title: text from the nearest block above the table (table heading).
-    """
     _, _, combined = extract_table_content(table_data)
     if not combined or len(combined) < 5:
         return None
@@ -267,10 +262,6 @@ def classify_table_via_content(table_data, tokenizer, model):
 
 
 def classify_table_rows(table_data, tokenizer, model):
-    """
-    Classify each row of a table individually based on its first-column label.
-    Returns list of {row_index, label, scope, confidence}.
-    """
     if not table_data:
         return []
     results = []
@@ -280,7 +271,6 @@ def classify_table_rows(table_data, tokenizer, model):
         label = row[0].strip()
         if not label or label.replace(",", "").replace(".", "").replace("-", "").replace(" ", "").isdigit():
             continue
-        # Use row label + first non-empty text cell for context
         context_parts = [label]
         for ci in range(1, min(3, len(row))):
             cell = row[ci].strip()
@@ -292,46 +282,29 @@ def classify_table_rows(table_data, tokenizer, model):
             value, unit = extract_value_unit(text)
             resolved = resolve_text_scope(text, pred, value, unit)
             results.append({
-                "row": ri,
-                "label": label,
-                "scope": resolved["scope"],
-                "confidence": resolved["confidence"],
+                "row": ri, "label": label,
+                "scope": resolved["scope"], "confidence": resolved["confidence"],
                 "scope_source": resolved["scope_source"],
             })
     return results
 
 
-def match_tables_to_blocks(tables_data, block_preds, layout_data, tokenizer, model):
-    """
-    Assign scope to each table using:
-      1. Table content classification (headers + row labels → ClimateBERT)
-      2. Per-row scope classification (each row's label individually)
-      3. Nearby text blocks' scope (majority vote)
-    Table output includes both overall scope and per-row breakdown.
-    """
+def match_tables_to_blocks(tables_data, block_preds, layout_data, tokenizer, model, image_dir):
     page_tables = {}
     for t in tables_data:
         page_tables.setdefault(t["page"], []).append(t)
-
     page_blocks = {}
     for bp in block_preds:
         p = _norm_page(bp["page"])
         page_blocks.setdefault(p, []).append(bp)
-
     table_results = []
-
     for page_name, tables in sorted(page_tables.items()):
-        img_size = get_image_size(page_name)
-        blocks = page_blocks.get(page_name, [])
-
+        img_size = get_image_size(page_name, image_dir)
         for t in tables:
-            bbox_px = t.get("bbox") or t.get("layout_bbox")
-            bbox_norm = normalize_bbox(bbox_px, *img_size) if img_size else None
             content_pred = classify_table_via_content(t.get("table_data", []), tokenizer, model)
             row_scopes = classify_table_rows(t.get("table_data", []), tokenizer, model)
             supported_rows = [row for row in row_scopes if row["scope"] != "Other"]
             distinct_scopes = sorted({row["scope"] for row in supported_rows})
-
             if len(distinct_scopes) > 1:
                 scope = "Mixed"
                 confidence = min(row["confidence"] for row in supported_rows)
@@ -345,11 +318,10 @@ def match_tables_to_blocks(tables_data, block_preds, layout_data, tokenizer, mod
                 scope = content_pred["scope"] if content_pred else "Other"
                 confidence = content_pred["confidence"] if content_pred else 0.0
                 source = "table_content" if content_pred else "unresolved"
-
             table_results.append({
                 "page": page_name,
                 "table_id": t["table_id"],
-                "bbox": bbox_px,
+                "bbox": t.get("bbox"),
                 "layout_bbox": t.get("layout_bbox"),
                 "crop_bbox": t.get("crop_bbox"),
                 "segments": t.get("segments", []),
@@ -364,58 +336,91 @@ def match_tables_to_blocks(tables_data, block_preds, layout_data, tokenizer, mod
                 "nearby_text": [],
                 "row_scopes": row_scopes,
             })
-
     return table_results
 
 
 def main():
+    ap = argparse.ArgumentParser(description="ClimateBERT Scope Classification")
+    ap.add_argument("--layout-json", required=True, help="Layout blocks JSON from step 4a")
+    ap.add_argument("--tables-json", required=True, help="Table data JSON from step 3")
+    ap.add_argument("--image-dir", required=True, help="Page images directory")
+    ap.add_argument("--out-dir", required=True, help="Output directory")
+    ap.add_argument("--ckpt", default=None, help="ClimateBERT checkpoint path")
+    ap.add_argument("--temperature", type=float, default=CLIMATEBERT_TEMPERATURE, help="Softmax temperature")
+    ap.add_argument("--run-id", default=None, help="Run ID (for metadata)")
+    args = ap.parse_args()
+
     t0 = time.time()
-    tokenizer, model = load_model()
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    ckpt = args.ckpt or os.path.join(project_root, "Output", "4_Model_Classification_Scope", "checkpoint-2178")
+    run_id = args.run_id or os.environ.get("RUN_ID", "unknown")
+
+    tokenizer, model = load_model(ckpt)
+    os.makedirs(args.out_dir, exist_ok=True)
 
     print("\nLoading layout JSON...")
-    with open(LAYOUT_JSON, "r", encoding="utf-8") as f:
+    with open(args.layout_json, "r", encoding="utf-8") as f:
         layout_data = json.load(f)
     n_blocks = sum(len(p.get("blocks", [])) for p in layout_data.values())
     print(f"  {len(layout_data)} pages, {n_blocks} blocks")
 
-    print("\nLoading all_tables.json...")
-    with open(TABLES_JSON, "r", encoding="utf-8") as f:
+    print("\nLoading tables JSON...")
+    with open(args.tables_json, "r", encoding="utf-8") as f:
         tables_data = json.load(f)
     print(f"  {len(tables_data)} tables")
 
-    # Classify text/figure blocks (skip table/table_text — they're handled by step 3 → step 4b)
+    # Classify text/figure blocks
     print("\nClassifying text/figure blocks...")
     block_preds = []
     skip_types = {"table", "table_text"}
+    # toc/header/footer blocks: preserve in structure but don't send to ClimateBERT
+    document_structure = {"toc": [], "header": [], "footer": [], "classified": []}
+
     for img_name, page in sorted(layout_data.items()):
         for bi, block in enumerate(page.get("blocks", [])):
-            if block.get("type") in skip_types:
-                continue
+            block_type = block.get("type", "")
             text = block.get("text", "").strip()
+
+            # Preserve TOC, header, footer in document structure
+            if block_type in ("toc", "header", "footer"):
+                document_structure.setdefault(block_type, []).append({
+                    "page": img_name, "block_id": bi, "type": block_type,
+                    "text": text, "bbox": block.get("bbox"),
+                })
+                if block_type == "toc":
+                    continue  # never send to ClimateBERT
+
+            if block_type in skip_types:
+                continue
             if not text or len(text) < 5:
                 continue
-            model_pred = predict_scope(text, tokenizer, model)
+
+            # Eligibility gate: skip non-ESG content before model call
+            if not is_esg_eligible(text) and block_type in ("header", "footer"):
+                continue
+
+            model_pred = predict_scope(text, tokenizer, model, temperature=args.temperature)
             if model_pred is None:
                 continue
 
             value, unit = extract_value_unit(text)
             pred = resolve_text_scope(text, model_pred, value, unit)
 
-            block_preds.append({
-                "page": img_name,
-                "block_id": bi,
-                "type": block.get("type", "unknown"),
-                "bbox": block.get("bbox"),
-                "text": text,
-                "value": value,
-                "unit": unit,
+            entry = {
+                "page": img_name, "block_id": bi, "type": block_type,
+                "bbox": block.get("bbox"), "text": text,
+                "value": value, "unit": unit,
                 **pred,
-            })
-    print(f"  {len(block_preds)} blocks classified")
+            }
+            block_preds.append(entry)
+            document_structure["classified"].append(entry)
 
-    # Classify each table from its combined cell content.
-    print("\nClassifying tables from combined table content...")
-    table_results = match_tables_to_blocks(tables_data, block_preds, layout_data, tokenizer, model)
+    classified_count = sum(1 for bp in block_preds if bp["scope"] != "Other")
+    print(f"  {len(block_preds)} blocks classified ({classified_count} non-Other)")
+
+    # Classify tables
+    print("\nClassifying tables...")
+    table_results = match_tables_to_blocks(tables_data, block_preds, layout_data, tokenizer, model, args.image_dir)
     print(f"  {len(table_results)} tables matched")
 
     # Stats
@@ -423,15 +428,8 @@ def main():
     print(f"\n  Block scope distribution: {dict(block_scope_counts)}")
     table_scope_counts = Counter(tr["scope"] for tr in table_results)
     print(f"  Table scope distribution: {dict(table_scope_counts)}")
-    table_source_counts = Counter(tr["scope_source"] for tr in table_results)
-    print(f"  Table scope source: {dict(table_source_counts)}")
 
-    # Sample confidence values
-    block_confs = [bp["confidence"] for bp in block_preds]
-    if block_confs:
-        print(f"  Block confidence range: {min(block_confs):.3f} - {max(block_confs):.3f} (avg: {np.mean(block_confs):.3f})")
-
-    # Build unified output — include ALL pages from layout JSON
+    # Build unified output
     unified = {}
     for img_name in layout_data:
         p = _norm_page(img_name)
@@ -440,56 +438,37 @@ def main():
     for bp in block_preds:
         p = _norm_page(bp["page"])
         unified[p]["text_blocks"].append({
-            "block_id": bp["block_id"],
-            "type": bp["type"],
-            "bbox": bp["bbox"],
-            "text": bp["text"],
-            "value": bp.get("value"),
-            "unit": bp.get("unit"),
-            "scope": bp["scope"],
-            "confidence": bp["confidence"],
+            "block_id": bp["block_id"], "type": bp["type"],
+            "bbox": bp.get("bbox"), "text": bp["text"],
+            "value": bp.get("value"), "unit": bp.get("unit"),
+            "scope": bp["scope"], "confidence": bp["confidence"],
+            "scope_evidence": bp.get("scope_evidence"),
         })
-
     for tr in table_results:
         p = tr["page"]
         unified.setdefault(p, {"page": p, "text_blocks": [], "tables": []})
         unified[p]["tables"].append({
-            "table_id": tr["table_id"],
-            "bbox": tr["bbox"],
-            "layout_bbox": tr.get("layout_bbox"),
-            "crop_bbox": tr.get("crop_bbox"),
+            "table_id": tr["table_id"], "bbox": tr.get("bbox"),
             "segments": tr.get("segments", []),
             "source_fingerprint": tr.get("source_fingerprint"),
-            "table_data": tr["table_data"],
-            "rows": tr["rows"],
-            "cols": tr["cols"],
-            "scope": tr["scope"],
-            "scope_source": tr["scope_source"],
+            "table_data": tr["table_data"], "rows": tr["rows"], "cols": tr["cols"],
+            "scope": tr["scope"], "scope_source": tr["scope_source"],
             "confidence": tr["confidence"],
             "nearby_text": tr.get("nearby_text", []),
             "row_scopes": tr.get("row_scopes", []),
         })
 
-    # Save
-    os.makedirs(OUT_DIR, exist_ok=True)
+    # Write outputs atomically
+    atomic_write_json(block_preds, os.path.join(args.out_dir, "scope_predictions.json"), schema_version=SCHEMA_VERSION)
+    atomic_write_json(table_results, os.path.join(args.out_dir, "table_scope_predictions.json"), schema_version=SCHEMA_VERSION)
+    atomic_write_json(unified, os.path.join(args.out_dir, "all_results_unified.json"), schema_version=SCHEMA_VERSION)
 
-    block_out = os.path.join(OUT_DIR, "scope_predictions.json")
-    with open(block_out, "w", encoding="utf-8") as f:
-        json.dump(block_preds, f, ensure_ascii=False, indent=2)
-    print(f"\nSaved block predictions to {block_out}")
-
-    tables_out = os.path.join(OUT_DIR, "table_scope_predictions.json")
-    with open(tables_out, "w", encoding="utf-8") as f:
-        json.dump(table_results, f, ensure_ascii=False, indent=2)
-    print(f"Saved table predictions to {tables_out}")
-
-    unified_out = os.path.join(OUT_DIR, "all_results_unified.json")
-    with open(unified_out, "w", encoding="utf-8") as f:
-        json.dump(unified, f, ensure_ascii=False, indent=2)
-    print(f"Saved unified output to {unified_out}")
+    # Also save document structure for downstream use
+    atomic_write_json(document_structure, os.path.join(args.out_dir, "document_structure.json"), schema_version=SCHEMA_VERSION)
 
     elapsed = time.time() - t0
     print(f"\nDone in {elapsed:.1f}s")
+    print(f"Outputs in: {args.out_dir}")
 
 
 if __name__ == "__main__":

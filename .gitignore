@@ -14,3 +14,26 @@ __pycache__/
 /output/4_Model_Classification_Scope/checkpoint-2178/*
 /test/*
 /3.Table_Understanding/output/*
+
+# Run isolation (uploaded PDFs + per-run outputs)
+/runs/*
+
+# Python
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+*.pyc
+__pycache__/
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

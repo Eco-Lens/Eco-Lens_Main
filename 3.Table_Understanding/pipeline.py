@@ -1,9 +1,18 @@
 import sys, os, json, time, re, math
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from PIL import Image, ImageDraw, ImageFont
 import torch; import torchvision
 
-from config import *
+from pipeline_core.config import SCHEMA_VERSION
+from pipeline_core.utils import atomic_write_json
+from config import (
+    TATR_MODEL, TATR_THRESHOLD, TATR_RESIZE, TABLE_LABEL,
+    MARGIN_X, MARGIN_Y, MARGIN_X_SMALL_CLUSTER, MARGIN_Y_SMALL_CLUSTER,
+    SMALL_CLUSTER_THRESHOLD, VERTICAL_GAP_MULTIPLIER, COLUMN_GAP_RATIO,
+    EXPAND_MARGIN, MAX_TABLE_REGION_AREA_RATIO, MIN_TOKENS_PER_REGION,
+    MIN_ROWS, MIN_COLS, PARAGRAPH_MIN_WORDS, PARAGRAPH_MAX_WORDS_NO_NUMERIC,
+    ESG_KEYWORDS, ESG_UNIT_PATTERNS, YEAR_PATTERN,
+)
 from utils import (
     merge_bboxes, bbox_area, expand_bbox,
     split_by_columns, split_by_vertical_gap, split_virtual_panels,
@@ -11,8 +20,6 @@ from utils import (
     is_paragraph_cell, is_numeric, is_numeric_lenient, parse_number,
 )
 from tatr_engine import TATREngine
-
-import re
 
 INVALID_METRICS = {
     "",
@@ -68,147 +75,53 @@ TOTAL_WORDS = {
     "grand total",
 }
 
-INVALID_METRICS = {
-    "",
-    "item",
-    "items",
-    "unit",
-    "units",
-    "%",
-    "times",
-    "description",
-    "year",
-    "years",
-    "no",
-    "no.",
-}
-
-HEADER_KEYWORDS = {
-    "metric",
-    "indicator",
-    "description",
-    "item",
-    "note",
-    "notes",
-    "unit",
-    "year",
-    "scope",
-    "category",
-    "kpi",
-} 
+HEADER_KEYWORDS = frozenset({
+    "metric", "indicator", "description", "item", "note", "notes",
+    "unit", "year", "scope", "category", "kpi",
+})
 
 def normalize_text(text: str):
     if not text:
         return ""
-    text = re.sub(r"\s+", " ", text)
-    return text.strip()
+    return re.sub(r"\s+", " ", text).strip()
 
+def clean_metric(metric):
+    metric = normalize_text(metric)
+    return re.sub(r"\s+", " ", metric.replace("\n", " ")).strip()
 
 def is_number(text):
     if text is None:
         return False
-
     text = str(text).strip()
-
-    if text == "":
+    if not text:
         return False
-
-    text = text.replace(",", "")
-
     try:
-        float(text)
+        float(text.replace(",", ""))
         return True
-    except:
+    except ValueError:
         return False
-    
+
 def is_heading(metric):
-
     metric = normalize_text(metric)
-
     if not metric:
         return False
-
     lower = metric.lower()
-
     if any(k in lower for k in SECTION_WORDS):
         return True
-
     letters = [c for c in metric if c.isalpha()]
-
     if letters:
-
-        ratio = sum(c.isupper() for c in letters) / len(letters)
-
-        if ratio > 0.8:
+        if sum(c.isupper() for c in letters) / len(letters) > 0.8:
             return True
-
     return False
 
 def extract_year(text):
-
     if text is None:
         return None
-
     m = re.search(r"(19|20)\d{2}", str(text))
-
-    if m:
-        return int(m.group())
-
-    return None
-
-import re
+    return int(m.group()) if m else None
 
 def is_total(metric):
-
-    metric = metric.lower()
-
-    return any(k in metric for k in TOTAL_WORDS)
-
-def normalize_text(text: str):
-    if not text:
-        return ""
-    text = re.sub(r"\s+", " ", text)
-    return text.strip()
-
-def clean_metric(metric):
-
-    metric = normalize_text(metric)
-
-    metric = metric.replace("\n"," ")
-
-    metric = re.sub(r"\s+"," ",metric)
-
-    return metric.strip()
-
-def is_number(text):
-    if text is None:
-        return False
-
-    text = str(text).strip()
-
-    if text == "":
-        return False
-
-    text = text.replace(",", "")
-
-    try:
-        float(text)
-        return True
-    except:
-        return False
-
-
-def extract_year(text):
-
-    if text is None:
-        return None
-
-    m = re.search(r"(19|20)\d{2}", str(text))
-
-    if m:
-        return int(m.group())
-
-    return None
+    return any(k in metric.lower() for k in TOTAL_WORDS)
 
 def detect_header_row(table_grid):
 
@@ -580,18 +493,6 @@ def run(ocr_path, labels_path, image_root, out_dir):
         _draw_page_overview(img, page_results, page_dir, base)
 
         # Write log
-        def _find_sets(obj, path="page_log"):
-            if isinstance(obj, set):
-                print(f"!!! SET FOUND at {path}: {obj}")
-            elif isinstance(obj, dict):
-                for k, v in obj.items():
-                    _find_sets(v, f"{path}.{k}")
-            elif isinstance(obj, (list, tuple)):
-                for i, v in enumerate(obj):
-                    _find_sets(v, f"{path}[{i}]")
-
-        _find_sets(page_log)
-
         with open(os.path.join(page_dir, "log.json"), "w", encoding="utf-8") as f:
             json.dump(page_log, f, ensure_ascii=False, indent=2)
 
