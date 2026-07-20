@@ -124,7 +124,7 @@ def draw_scope_overlay(page_name, img_path, blocks_data, tables_data, out_dir):
     return out_path
 
 
-def generate_html(unified_data, layout_data, scope_stats):
+def generate_html(unified_data, layout_data, scope_stats, out_dir):
     non_other_blocks = sum(
         1 for pd in unified_data.values()
         for b in pd.get("text_blocks", [])
@@ -183,7 +183,7 @@ def generate_html(unified_data, layout_data, scope_stats):
                 rc = SCOPE_COLORS_HEX.get(rs.get("scope", "Other"), "#888")
                 row_html += f'<div style="border-left:3px solid {rc};padding:3px 8px;margin:2px 0;font-size:11px">Row {rs.get("row","")}: <span style="background:{rc};color:white;padding:1px 6px;border-radius:3px;font-size:10px">{rs.get("scope","")}</span> {str(rs.get("label",""))[:80]}</div>'
             tscope = t.get("scope", "Other")
-        tables_html += (
+            tables_html += (
                 f"<div class='card' style='border-left:5px solid {tc}'>"
                 f"<h4>{t.get('table_id','')} "
                 f"<span style='background:{tc};color:white;padding:2px 10px;border-radius:4px;font-size:13px'>{tscope} ({t.get('confidence',0):.2f})</span>"
@@ -249,7 +249,7 @@ h4{{margin:0 0 8px;font-size:13px;color:#555}}
 {"".join(pages_html)}
 <script>function togglePage(el){{el.parentElement.classList.toggle('collapsed');}}</script>
 </body></html>"""
-    out_path = os.path.join(args.out_dir, "index.html")
+    out_path = os.path.join(out_dir, "index.html")
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(html)
     print(f"HTML report: {out_path}")
@@ -351,7 +351,7 @@ def main():
 
     # Generate HTML + CSV
     try:
-        generate_html(unified_data, layout_data, scope_stats)
+        generate_html(unified_data, layout_data, scope_stats, args.out_dir)
     except Exception as e:
         print(f"  Error generating HTML: {e}")
 

@@ -147,7 +147,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);overflow:hid
 .ph-bar-fill.done{background:var(--accent)}
 .ph-bar-fill.fail{background:var(--red);width:100%!important}
 .ph-bar-label{display:flex;justify-content:space-between;align-items:center;font-size:13px;color:var(--text2)}
-.ph-bar-label .ph-pct{font-size:34px;font-weight:800;color:var(--text);line-height:1}
+.ph-bar-label .ph-pct{font-size:22px;font-weight:800;color:var(--text);line-height:1}
 .ph-bar-label .ph-pct.accent{color:var(--accent)}
 .ph-bar-label .ph-pct.cyan{color:var(--cyan)}
 .ph-bar-label .ph-pct.fail{color:var(--red)}
@@ -294,7 +294,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);overflow:hid
         <div class="btn-group"><button class="btn btn-p" id="btnRun" disabled><span class="btn-txt">&#9654; Run Pipeline</span><span class="spinner"></span></button></div>
         <div class="btn-group" style="margin-top:8px">
           <button class="btn btn-g" id="btnRetry" style="display:none"><span>&#8635;</span> Retry</button>
-          <button class="btn btn-g" id="btnResults" style="display:none"><span>&#128202;</span> Results</button>
+          <button class="btn btn-g" id="btnResults" style="display:none"><span>&#128202;</span> Report</button>
           <button class="btn btn-s" id="btnReset" style="display:none"><span>&#8634;</span> New</button>
         </div>
       </div>
@@ -326,7 +326,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);overflow:hid
 </div>
 
 <script>
-var STEP_ICONS = {convert:"\uD83D\uDCC4",ocr:"\uD83D\uDD0D",layout:"\uFE0F",tables:"\uD83D\uDCCA",scope:"\uD83C\uDFAF",visualize:"\uD83D\uDCC8"};
+var STEP_ICONS = {convert:"\uD83D\uDCC4",ocr:"\uD83D\uDD0D",layout:"\uD83D\uDCCD",tables:"\uD83D\uDCCA",scope:"\uD83C\uDFAF",visualize:"\uD83D\uDCC8"};
 var SCOPE_STYLES={"Scope 1":{br:"#ff4444",tx:"#ff6b6b",hd:"rgba(255,68,68,0.12)"},"Scope 2":{br:"#ff8800",tx:"#ffaa44",hd:"rgba(255,136,0,0.12)"},"Scope 3":{br:"#44aaff",tx:"#66bbff",hd:"rgba(68,170,255,0.1)"},"Other":{br:"#555",tx:"#888",hd:"rgba(85,85,85,0.05)"},"Mixed":{br:"#aa44ff",tx:"#bb66ff",hd:"rgba(170,68,255,0.12)"}};
 var STEPS_DEFAULT={completed:"Done",running:"Running",failed:"Failed",queued:"Queued",cancelled:"Cancelled"};
 var STEPS_CLASSES={completed:"done-b",running:"run-b",failed:"fail-b",queued:"queued-b",cancelled:"queued-b"};
@@ -334,12 +334,13 @@ var STEPS_CLASSES={completed:"done-b",running:"run-b",failed:"fail-b",queued:"qu
 // XSS-safe helpers
 function esc(s){if(!s)return"";return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")}
 function setText(el,s){if(el){if(s===null||s===void 0)s="";el.textContent=s}}
+function fmtSize(b){if(b==null)return"";if(b<1048576)return"("+(b/1024).toFixed(0)+" KB)";return"("+(b/1048576).toFixed(1)+" MB)"}
 
 // SSE Connection Manager
-var SMgr={src:null,rid:null,lastId:-1,retimer:null,retries:0,maxRetries:5,reconnecting:false,
-connect:function(rid){if(!rid)return;this.close();startPoll(rid);this.rid=rid;this.retries=0;this.reconnecting=false;this._open()},
+var SMgr={src:null,rid:null,lastId:-1,retimer:null,retries:0,maxRetries:5,
+connect:function(rid){if(!rid)return;this.close();startPoll(rid);this.rid=rid;this.retries=0;this._open()},
 _open:function(){var self=this;if(!self.rid)return;self.src=new EventSource("/api/runs/"+encodeURIComponent(self.rid)+"/stream?after="+self.lastId);
-self.src.onopen=function(){self.reconnecting=false;self.retries=0};
+self.src.onopen=function(){self.retries=0};
 self.src.onmessage=function(e){
   try{var d=JSON.parse(e.data);if(!d||!d.events)return;
     d.events.forEach(function(ev){
@@ -355,15 +356,16 @@ self.src.onmessage=function(e){
     if(d.done){self.close();if(d.status==="completed"){document.getElementById("btnResults").style.display="block";document.getElementById("btnReset").style.display="block"}}
   }catch(err){}
 };
-self.src.onerror=function(){self.close();if(self.retries>=self.maxRetries){showReconnectFailed();return}self.retries++;var d=Math.min(1000*Math.pow(2,self.retries),15000);self.retimer=setTimeout(function(){self._open()},d)}},
-close:function(){if(this.src){this.src.onerror=null;this.src.close();this.src=null}if(this.retimer){clearTimeout(this.retimer);this.retimer=null}if(pollTimer){clearInterval(pollTimer);pollTimer=null}this.reconnecting=false;this.retries=0}};
+self.src.onerror=function(){self.close();if(self.retries>=self.maxRetries){showReconnectFailed();startPoll(self.rid);return}self.retries++;var d=Math.min(1000*Math.pow(2,self.retries),15000);self.retimer=setTimeout(function(){self._open()},d)}},
+close:function(){if(this.src){this.src.onerror=null;this.src.close();this.src=null}if(this.retimer){clearTimeout(this.retimer);this.retimer=null}if(pollTimer){clearInterval(pollTimer);pollTimer=null}this.retries=0}};
 function startPoll(rid){if(pollTimer)clearInterval(pollTimer);pollTimer=setInterval(function(){if(!rid)return;fetch("/api/runs/"+encodeURIComponent(rid)+"/status").then(function(r){if(!r.ok)return null;return r.json()}).then(function(st){if(st&&st.status!=="idle")renderState(st.status,st)}).catch(function(){})},3000)}
 function showReconnectFailed(){setText(document.getElementById("devLabel"),"Disconnected");var db=document.getElementById("devBadge");db.className="tb-badge fail"}
 
 // DOM
 var $=function(s){return document.querySelector(s)},$$=function(s){return Array.from(document.querySelectorAll(s))};
-var br=$("#btnRun"),bretry=$("#btnRetry"),bres=$("#btnResults"),breset=$("#btnReset");
-var sList=$("#stepList"),sGrid=$("#stageGrid"),scCard=$("#stageCard"),scIcon=$("#scIcon"),scName=$("#scName"),scDesc=$("#scDesc"),scBody=$("#scBody"),scpFill=$("#scpFill"),scpLabel=$("#scpLabel");
+  var br=$("#btnRun"),bretry=$("#btnRetry"),bres=$("#btnResults"),breset=$("#btnReset");
+  var sList=$("#stepList"),sGrid=$("#stageGrid"),scCard=$("#stageCard"),scIcon=$("#scIcon"),scName=$("#scName"),scDesc=$("#scDesc"),scBody=$("#scBody"),scpFill=$("#scpFill"),scpLabel=$("#scpLabel");
+  var stepOutputLinks={convert:"",ocr:"",layout:"",tables:"",blocks:"",scope:"",visualize:""};
 var phBar=$("#phBar"),phPct=$("#phPct"),phElapsed=$("#phElapsed"),phEta=$("#phEta"),phStages=$("#phStages");
 var devBadge=$("#devBadge"),devLabel=$("#devLabel"),runBadge=$("#runBadge"),runIdLabel=$("#runIdLabel");
 var lc=$("#logCount"),rp=$("#resultsPanel"),ue=$("#upError");
@@ -371,7 +373,7 @@ var lc=$("#logCount"),rp=$("#resultsPanel"),ue=$("#upError");
 var runSteps=[],runCfg={maxUploadBytes:52428800},runId=null,runStatus="idle",pollTimer=null,elapsedTimer=null,elapsedBase=0,elapsedStart=null;
 
 function fmtTime(s){if(s==null||s<0)return"\u2013";if(s<60)return Math.round(s)+"s";var m=Math.floor(s/60),sec=Math.round(s%60);return m+"m "+sec.toString().padStart(2,"0")+"s"}
-function fmtETA(s){if(s==null)return"\u2026";if(s<30)return"<1m";var m=Math.round(s/60);if(m<60)return"~"+m+"m";return"~"+Math.round(m/60)+"h "+(m%60)+"m"}
+function fmtETA(s){if(s==null||s<0)return"\u2026";if(s<30)return"<1m";var m=Math.round(s/60);if(m<60)return"~"+m+"m";return"~"+Math.round(m/60)+"h "+(m%60)+"m"}
 
 function renderState(status,payload){
   runStatus=status||payload.status||runStatus;
@@ -424,7 +426,9 @@ function renderState(status,payload){
   setText(phPct,pct+"%");
   phPct.className="ph-pct"+(done?" accent":"")+(failed?" fail":"")+(running?" cyan":"");
   phBar.style.width=pct+"%";
-  setText(phElapsed,fmtTime(elapsed));
+  if(!running||!elapsedTimer){setText(phElapsed,fmtTime(elapsed))}
+  var eta=payload.estimated_remaining_seconds;
+  setText(phEta,fmtETA(eta!=null?eta:(running?null:-1)))
 
   var doneCount=0;if(steps)steps.forEach(function(s){if(s.status==="completed")doneCount++});
   setText(phStages,doneCount+"/"+(steps?steps.length:"?"));
@@ -433,6 +437,8 @@ function renderState(status,payload){
   if(done){
     br.querySelector(".btn-txt").textContent="Complete";
     br.style.display="";bretry.style.display="none";bres.style.display="block";breset.style.display="block";br.disabled=true;
+    // Set Report link from payload
+    if(runId){setResultLinks(payload.output_html,payload.output_csv)}else if(payload.output_html){bres.setAttribute("data-url","/"+payload.output_html)}else{bres.removeAttribute("data-url")}
   }else if(failed||cancelled){
     br.querySelector(".btn-txt").textContent="Run";
     br.style.display="";bretry.style.display="block";bres.style.display="none";breset.style.display="block";br.disabled=false;
@@ -448,6 +454,16 @@ function renderState(status,payload){
   // Steps & stage card
   if(steps&&steps.length){
     buildSteps(steps);
+    // Add step click → per-step HTML output viewer
+    document.querySelectorAll(".step-item").forEach(function(el,i){
+      el.onclick=function(){
+        var sid=this.getAttribute("data-id");
+        if(!sid||!runId)return;
+        var base="/api/runs/"+encodeURIComponent(runId)+"/results/";
+        var urls={convert:base+"convert/report",ocr:base+"ocr/report",layout:base+"layout/report",tables:base+"tables/report",blocks:base+"blocks/report",scope:base+"scope/report",visualize:base+"report"};
+        window.open(urls[sid]||base+"report","_blank")
+      }
+    });
     var active=null;for(var i=0;i<steps.length;i++){if(steps[i].active){active=steps[i];break}}
     if(active&&running){updateStage(active,cp,tp,elapsed)}
     else if(failed){var fs=null;for(var i=0;i<steps.length;i++){if(steps[i].status==="failed"){fs=steps[i];break}}if(fs)updateStage(fs,cp,tp,elapsed);else scCard.classList.remove("show")}
@@ -459,15 +475,15 @@ function buildSteps(steps){
   if(!steps||!steps.length)return;
   sList.innerHTML=steps.map(function(st){
     var ic=STEP_ICONS[st.id]||"\uD83D\uDCC4";
-    var cls=st.status==="failed"?"fail":st.status==="completed"?"done":st.active?"active":"";
+    var cls=st.status==="failed"?"fail":st.status==="completed"?"done":st.status==="cancelled"?"cancelled":st.active?"active":"";
     var bCls=STEPS_CLASSES[st.status]||"queued-b";
     var bLbl=STEPS_DEFAULT[st.status]||"Queued";
-    return '<div class="step-item '+cls+'" data-id="'+esc(st.id)+'"><span class="step-conn"></span><span class="step-icon">'+ic+'</span><div class="step-si"><div class="sn">'+esc(st.name)+'</div><div class="sd">'+esc(st.description||"")+'</div><div class="st"><span class="st-b '+bCls+'">'+bLbl+'</span></div></div><span class="st-ch">'+(st.status==="failed"?"\u2716":"\u2713")+'</span></div>'
+    return '<div class="step-item '+cls+'" data-id="'+esc(st.id)+'"><span class="step-conn"></span><span class="step-icon">'+ic+'</span><div class="step-si"><div class="sn">'+esc(st.name)+'</div><div class="sd">'+esc(st.description||"")+'</div><div class="st"><span class="st-b '+bCls+'">'+bLbl+'</span></div></div><span class="st-ch">'+(st.status==="failed"?"\u2716":st.status==="completed"?"\u2713":"")+'</span></div>'
   }).join("");
   sGrid.innerHTML=steps.map(function(st){
     var ic=STEP_ICONS[st.id]||"\uD83D\uDCC4";
-    var cls=st.status==="failed"?"fail":st.status==="completed"?"done":st.active?"running":"queued";
-    var bCls=st.status==="failed"?"f":st.status==="completed"?"d":st.active?"r":"q";
+    var cls=st.status==="failed"?"fail":st.status==="completed"?"done":st.status==="cancelled"?"queued":st.active?"running":"queued";
+    var bCls=st.status==="failed"?"f":st.status==="completed"?"d":st.status==="cancelled"?"q":st.active?"r":"q";
     var bLbl=STEPS_DEFAULT[st.status]||"Queued";
     return '<div class="sg-card '+cls+'" data-id="'+esc(st.id)+'"><div class="sg-card-top"><span class="sg-icon">'+ic+'</span><span class="sg-name">'+esc(st.name)+'</span><span class="sg-card-status '+bCls+'">'+bLbl+'</span></div><div class="sg-line">'+esc(st.description||"")+'</div><div class="sg-bar"><div class="sg-fill" style="width:'+(st.status==="completed"?100:st.status==="failed"?100:st.active?50:0)+'%"></div></div></div>'
   }).join("");
@@ -500,27 +516,35 @@ function uploadFile(file){
   ue.classList.remove("show");
   if(!file.name.toLowerCase().endsWith(".pdf")){ue.innerHTML='<span style="color:var(--red)">Only PDF files accepted.</span>';ue.classList.add("show");return}
   if(file.size>runCfg.maxUploadBytes){var mb=Math.round(runCfg.maxUploadBytes/1048576);ue.innerHTML='<span style="color:var(--red)">File exceeds the '+mb+' MB upload limit.</span>';ue.classList.add("show");return}
-  uc.classList.add("done");setText(un,file.name);setText(us,"("+(file.size/1024).toFixed(0)+" KB)");ud.classList.add("show");$("#btnRun").disabled=false;
+  br.disabled=true;setText(br.querySelector(".btn-txt"),"Uploading\u2026");
+  uc.classList.add("done");setText(un,file.name);setText(us,fmtSize(file.size));ud.classList.add("show");
   var fd=new FormData();fd.append("file",file);
   fetch("/api/upload",{method:"POST",body:fd}).then(function(r){if(!r.ok)return r.json().then(function(e){throw new Error(e.detail||"Upload failed")});return r.json()}).then(function(d){
     runId=d.run_id;SMgr.rid=d.run_id;
+    setText(runIdLabel,d.run_id.replace("run_",""));runBadge.style.display="flex";
     sessionStorage.setItem("eco_run_id",d.run_id);
     var url=new URL(window.location);url.searchParams.set("run",d.run_id);window.history.replaceState({},"",url);
     addAct("upload","Uploaded "+file.name);
     devBadge.className="tb-badge";setText(devLabel,"Uploaded");
+    br.disabled=false;setText(br.querySelector(".btn-txt"),"\u25B6 Run Pipeline");
   }).catch(function(e){
-    ue.innerHTML='<span style="color:var(--red)">'+esc(e.message)+'</span>';ue.classList.add("show");addAct("err","Upload failed: "+e.message)
+    uc.classList.remove("done");setText(un,"");setText(us,"");ud.classList.remove("show");
+    ue.innerHTML='<span style="color:var(--red)">'+esc(e.message)+'</span>';ue.classList.add("show");addAct("err","Upload failed: "+e.message);
+    br.disabled=true;setText(br.querySelector(".btn-txt"),"\u25B6 Run Pipeline");
   })
 }
 ucb.addEventListener("click",function(e){
   e.stopPropagation();clearFile()
 });
 function clearFile(){
+  if(runId&&runStatus==="running"){fetch("/api/reset",{method:"POST"})}
   SMgr.close();sessionStorage.removeItem("eco_run_id");
   var url=new URL(window.location);url.searchParams.delete("run");window.history.replaceState({},"",url);
-  runId=null;SMgr.rid=null;
+  runId=null;SMgr.rid=null;runStatus="idle";
+  if(elapsedTimer){clearInterval(elapsedTimer);elapsedTimer=null}
   uc.classList.remove("done");setText(un,"");setText(us,"");ud.classList.remove("show");ue.classList.remove("show");ui.value="";
-  br.disabled=true;setText(br.querySelector(".btn-txt"),"\u25B6 Run Pipeline");br.disabled=false;br.disabled=!un.textContent
+  br.disabled=true;setText(br.querySelector(".btn-txt"),"\u25B6 Run Pipeline");
+  runBadge.style.display="none";devBadge.className="tb-badge";setText(devLabel,"Ready")
 }
 
 // Logs
@@ -570,11 +594,8 @@ bretry.addEventListener("click",function(){
 });
 
 bres.addEventListener("click",function(){
-  $$(".tab-btn").forEach(function(b){b.classList.remove("active")});
-  document.querySelector('[data-tab="results"]').classList.add("active");
-  $$(".tab-content").forEach(function(x){x.classList.remove("active")});
-  document.getElementById("tabResults").classList.add("active");
-  loadResults()
+  var url=this.getAttribute("data-url");
+  if(url){window.open(url,"_blank")}else{loadResults()}
 });
 
 breset.addEventListener("click",function(){
@@ -585,7 +606,9 @@ breset.addEventListener("click",function(){
   uc.classList.remove("done");setText(un,"");setText(us,"");ud.classList.remove("show");ue.classList.remove("show");
   br.disabled=true;br.querySelector(".btn-txt").textContent="\u25B6 Run Pipeline";
   bres.style.display="none";bretry.style.display="none";breset.style.display="none";
-  devBadge.className="tb-badge";setText(devLabel,"Ready");
+  runBadge.style.display="none";devBadge.className="tb-badge";setText(devLabel,"Ready");
+  stepOutputLinks={convert:"",ocr:"",layout:"",tables:"",blocks:"",scope:"",visualize:""};
+  setText(lc,"0");
   al.innerHTML='<div class="console-empty"><div class="ce-icon">\u2B24</div><div class="ce-t1">Ready</div><div class="ce-t2">Upload a PDF report and run the pipeline.</div></div>';
   con.innerHTML='<div class="console-empty"><div class="ce-icon">\u2B24</div><div class="ce-t1">No Logs</div><div class="ce-t2">Technical output will appear here.</div></div>';
   rp.classList.remove("show");rp.innerHTML="";scCard.classList.remove("show");buildSteps(runSteps)
@@ -605,10 +628,23 @@ $$(".tab-btn").forEach(function(b){
 function loadResults(){
   fetch("/api/runs/"+encodeURIComponent(runId||"")+"/results/summary").then(function(r){if(!r.ok)return null;return r.json()}).then(function(d){if(d)renderResults(d)}).catch(function(){})
 }
+function setResultLinks(htmlUrl,csvUrl){
+  if(runId){
+    var reportUrl="/api/runs/"+encodeURIComponent(runId)+"/results/report";
+    bres.setAttribute("data-url",reportUrl);
+    stepOutputLinks.visualize=reportUrl
+  }
+  if(runId&&csvUrl)stepOutputLinks.csv="/"+csvUrl
+}
+var lastSummary=null;
 function renderResults(d){
+  if(!d||!d.scope_counts)return;
+  lastSummary=d;
+  setResultLinks(d.output_html,d.output_csv);
   var total=0;Object.keys(d.scope_counts).forEach(function(k){total+=d.scope_counts[k]});
   var nonOther=0;Object.keys(d.scope_counts).forEach(function(k){if(k!=="Other")nonOther+=d.scope_counts[k]});
-  var bars=Object.keys(d.scope_counts).sort(function(a,b){return d.scope_counts[b]-d.scope_counts[a]}).map(function(s){return '<div class="s-bar" style="width:'+(d.scope_counts[s]/total*100).toFixed(1)+'%;background:'+(SCOPE_STYLES[s]?SCOPE_STYLES[s].br:"#555")+'"></div>'}).join("");
+  var denom=total||1;
+  var bars=Object.keys(d.scope_counts).sort(function(a,b){return d.scope_counts[b]-d.scope_counts[a]}).map(function(s){return '<div class="s-bar" style="width:'+(d.scope_counts[s]/denom*100).toFixed(1)+'%;background:'+(SCOPE_STYLES[s]?SCOPE_STYLES[s].br:"#555")+'"></div>'}).join("");
   var leg=Object.keys(d.scope_counts).sort(function(a,b){return d.scope_counts[b]-d.scope_counts[a]}).map(function(s){return '<span class="s-leg-item"><span class="sw" style="background:'+(SCOPE_STYLES[s]?SCOPE_STYLES[s].br:"#555")+'"></span>'+esc(s)+': <span class="sn">'+d.scope_counts[s]+'</span></span>'}).join("");
   var sOrder=["Scope 1","Scope 2","Scope 3","Mixed","Other"];var groups="";
   sOrder.forEach(function(sc){
@@ -617,21 +653,47 @@ function renderResults(d){
     var rows=blocks.map(function(b){return '<tr><td style="color:var(--text3);font-size:8px">'+esc(b.page)+'</td><td><span style="font-size:8px;background:rgba(255,255,255,0.02);padding:1px 4px;border-radius:2px;color:var(--text3)">'+esc(b.type)+'</span></td><td class="sg-text" title="'+esc(b.text)+'">'+esc(b.text)+'</td><td style="font-size:8px;color:var(--text3)">'+(b.confidence?b.confidence.toFixed(3):"-")+'</td></tr>'}).join("");
     groups+='<div class="sg"><div class="sg-h" style="background:'+st.hd+';border:1px solid '+st.br+'18"><span style="color:'+st.tx+'">'+esc(sc)+'</span><span class="sgn" style="color:'+st.tx+'">'+blocks.length+'</span></div><div class="sg-b" style="border-color:'+st.br+'10"><table><thead><tr><th style="width:60px">Page</th><th style="width:40px">Type</th><th>Content</th><th style="width:40px">Conf</th></tr></thead><tbody>'+rows+'</tbody></table></div></div>'
   });
-  rp.innerHTML='<div class="su"><h2>Results</h2><div class="rsub">ESG scope classification breakdown</div></div><div class="r-grid fi"><div class="r-card accent"><div class="rn">'+d.total_pages+'</div><div class="rl">Pages</div></div><div class="r-card accent"><div class="rn">'+nonOther+'</div><div class="rl">Classified</div></div><div class="r-card accent"><div class="rn">'+d.total_tables+'</div><div class="rl">Tables</div></div></div><div class="s-bar-t">'+bars+'</div><div class="s-leg">'+leg+'</div><div class="r-links fi"><a href="/'+d.output_html+'" target="_blank" class="l1">\uD83D\uDCC4 Report \u2192</a><a href="/'+d.output_csv+'" target="_blank" class="l2" download="scope_predictions.csv">\uD83D\uDCE5 CSV</a></div>'+groups+'<div class="ov"><h3>Scope Overlays</h3><div class="ov-grid" id="ovGrid"></div></div>';
+  var reportUrl=runId?"/api/runs/"+encodeURIComponent(runId)+"/results/report":"/"+d.output_html;
+  var csvUrl=d.output_csv?"/"+d.output_csv:"#";
+  var layoutReportUrl=runId?"/api/runs/"+encodeURIComponent(runId)+"/results/layout/report":"#";
+  var tableReportUrl=runId?"/api/runs/"+encodeURIComponent(runId)+"/results/tables/report":"#";
+  rp.innerHTML='<div class="su"><h2>Results</h2><div class="rsub">ESG scope classification breakdown</div></div><div class="r-links fi"><a href="'+reportUrl+'" target="_blank" class="l1">\uD83D\uDCC4 Final Report \u2192</a><a href="'+layoutReportUrl+'" target="_blank" class="l1">\uD83D\uDCCD LayoutLMv3 \u2192</a><a href="'+tableReportUrl+'" target="_blank" class="l1">\uD83D\uDCCA Table Understanding \u2192</a><a href="'+csvUrl+'" target="_blank" class="l2" download="scope_predictions.csv">\uD83D\uDCE5 CSV</a></div><div class="r-grid fi"><div class="r-card accent"><div class="rn">'+d.total_pages+'</div><div class="rl">Pages</div></div><div class="r-card accent"><div class="rn">'+nonOther+'</div><div class="rl">Classified</div></div><div class="r-card accent"><div class="rn">'+d.total_tables+'</div><div class="rl">Tables</div></div></div><div class="s-bar-t">'+bars+'</div><div class="s-leg">'+leg+'</div>'+groups+'<div class="ov"><h3>Scope Overlays</h3><div class="ov-grid" id="ovGrid"></div></div>';
   rp.classList.add("show");
   var empty=$("#tabResults .console-empty");if(empty)empty.style.display="none";
   setTimeout(loadOv,100)
 }
+function renderIntermediateShell(title,subtitle,body){
+  rp.innerHTML='<div class="su"><h2>'+esc(title)+'</h2><div class="rsub">'+esc(subtitle||"")+'</div></div><div class="r-links fi"><button class="btn btn-s" style="width:auto;padding:9px 14px" onclick="if(lastSummary)renderResults(lastSummary);else loadResults()">Summary</button><button class="btn btn-s" style="width:auto;padding:9px 14px" onclick="loadLayoutResults()">LayoutLMv3</button><button class="btn btn-s" style="width:auto;padding:9px 14px" onclick="loadTableResults()">Table Understanding</button></div>'+body;
+  rp.classList.add("show");var empty=$("#tabResults .console-empty");if(empty)empty.style.display="none"
+}
+function loadLayoutResults(){
+  fetch("/api/runs/"+encodeURIComponent(runId||"")+"/results/layout").then(function(r){if(!r.ok)throw new Error("LayoutLMv3 results not found");return r.json()}).then(function(d){
+    var cards='<div class="r-grid fi"><div class="r-card accent"><div class="rn">'+d.total_pages+'</div><div class="rl">Pages</div></div><div class="r-card accent"><div class="rn">'+esc((d.model&&d.model.name)||"layoutlmv3")+'</div><div class="rl">Model</div></div><div class="r-card accent"><div class="rn">'+(d.pages||[]).reduce(function(a,p){return a+(p.word_count||0)},0)+'</div><div class="rl">Words</div></div></div>';
+    var pages=(d.pages||[]).map(function(p){var counts=Object.keys(p.label_counts||{}).map(function(k){return esc(k)+': <b>'+p.label_counts[k]+'</b>'}).join(' · ');var rows=(p.sample_words||[]).map(function(w){return '<tr><td>'+esc(w.text)+'</td><td>'+esc(w.label)+'</td><td>'+esc(w.confidence)+'</td></tr>'}).join('');return '<div class="sg"><div class="sg-h"><span>'+esc(p.page)+'</span><span class="sgn">'+(p.word_count||0)+' words</span></div><div class="sg-b"><div style="padding:10px;color:var(--text2)">'+counts+'</div><table><thead><tr><th>Word</th><th>Label</th><th>Confidence</th></tr></thead><tbody>'+rows+'</tbody></table></div></div>'}).join('');
+    renderIntermediateShell('LayoutLMv3 Results','Word-level layout labels and confidence scores',cards+pages)
+  }).catch(function(e){renderIntermediateShell('LayoutLMv3 Results',e.message,'<div class="console-empty"><div class="ce-t1">No LayoutLMv3 result file found</div></div>')})
+}
+function loadTableResults(){
+  fetch("/api/runs/"+encodeURIComponent(runId||"")+"/results/tables").then(function(r){if(!r.ok)throw new Error("Table Understanding results not found");return r.json()}).then(function(d){
+    var cards='<div class="r-grid fi"><div class="r-card accent"><div class="rn">'+d.total_pages+'</div><div class="rl">Pages</div></div><div class="r-card accent"><div class="rn">'+d.total_tables+'</div><div class="rl">Tables</div></div><div class="r-card accent"><div class="rn">'+d.total_metrics+'</div><div class="rl">Metrics</div></div></div>';
+    var open=d.index_url?'<div class="r-links fi"><a href="/'+d.index_url+'" target="_blank" class="l1">Open Table Report \u2192</a><a href="/'+d.json_url+'" target="_blank" class="l2">Raw JSON</a></div>':'<div class="r-links fi"><a href="/'+d.json_url+'" target="_blank" class="l2">Raw JSON</a></div>';
+    var rows=(d.tables||[]).map(function(t){return '<tr><td>'+esc(t.page)+'</td><td>'+esc(t.table_id)+'</td><td>'+esc(t.rows)+'</td><td>'+esc(t.cols)+'</td><td>'+esc(t.is_esg?'Yes':'No')+'</td><td>'+esc(t.caption)+'</td></tr>'}).join('');
+    var table='<div class="sg"><div class="sg-h"><span>Detected Tables</span><span class="sgn">'+(d.tables||[]).length+'</span></div><div class="sg-b"><table><thead><tr><th>Page</th><th>ID</th><th>Rows</th><th>Cols</th><th>ESG</th><th>Caption</th></tr></thead><tbody>'+rows+'</tbody></table></div></div>';
+    renderIntermediateShell('Table Understanding Results','Detected tables, metrics, and ESG signals',cards+open+table)
+  }).catch(function(e){renderIntermediateShell('Table Understanding Results',e.message,'<div class="console-empty"><div class="ce-t1">No table result file found</div></div>')})
+}
 function loadOv(){
+  var g=document.getElementById("ovGrid");if(!g)return;
+  g.innerHTML='<div class="console-empty" style="grid-column:1/-1;padding:16px"><div class="ce-icon">\u23F3</div><div class="ce-t1">Loading overlays...</div></div>';
   fetch("/api/runs/"+encodeURIComponent(runId||"")+"/results/overlays").then(function(r){if(!r.ok)return null;return r.json()}).then(function(d){
-    if(!d||!d.overlays)return;var g=document.getElementById("ovGrid");if(!g)return;
+    g.innerHTML="";if(!d||!d.overlays)return;
     d.overlays.slice(0,18).forEach(function(o){
       var c=document.createElement("div");c.className="ov-card";
       var img=document.createElement("img");img.src="/"+o.url;img.loading="lazy";
       var lbl=document.createElement("div");lbl.className="ol";setText(lbl,o.name);
       c.appendChild(img);c.appendChild(lbl);c.addEventListener("click",function(){window.open("/"+o.url,"_blank")});g.appendChild(c)
     })
-  }).catch(function(){})
+  }).catch(function(){g.innerHTML='<div class="console-empty" style="grid-column:1/-1;padding:16px"><div class="ce-t1">No overlays found</div></div>'})
 }
 
 // Init
@@ -649,10 +711,10 @@ function init(){
         if(!st)return;
         renderState(st.status,st);
         if(st.document_name){uc.classList.add("done");setText(un,st.document_name);setText(us,st.document_size?"("+Math.round(st.document_size/1024)+" KB)":"");ud.classList.add("show");if(st.total_pages)setText(pv,st.total_pages);setText(rv,rid.replace("run_",""))}
-        if(st.status==="running"){SMgr.connect(rid)}
-        else if(st.status==="completed"){bres.style.display="block";breset.style.display="block"}
+        if(st.status==="completed"){bres.style.display="block";breset.style.display="block";if(st.output_html)setResultLinks(st.output_html,st.output_csv);else bres.removeAttribute("data-url")}
+        else if(st.status==="running"){SMgr.connect(rid)}
         else if(st.status==="failed"){bretry.style.display="block";breset.style.display="block"}
-      }).catch(function(){sessionStorage.removeItem("eco_run_id")})
+      }).catch(function(){sessionStorage.removeItem("eco_run_id");runBadge.style.display="none"})
     }
   }).catch(function(){buildSteps(runSteps)})
 }
