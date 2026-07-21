@@ -112,5 +112,175 @@ The primary dataset uses Vietnamese enterprise reports to ensure relevance to lo
 | Standards Retrieval (RAG) | BGE-large Embeddings |
 | Vector Database | FAISS / ChromaDB |
 | Framework | PyTorch, Hugging Face Transformers |
-=======
+
+## How to Run
+
+### 1. Prerequisites
+
+Use Python 3.11 on Windows. The project has been tested from the repository root:
+
+```powershell
+C:\Doan\Eco-Lens_Main
+```
+
+Install dependencies:
+
+```powershell
+python -m pip install -r requirements.txt
+```
+
+The pipeline uses model checkpoints from the `Output/` directory:
+
+```text
+Output/2_Model_Layoutlmv3_Finetune/checkpoint-1000
+Output/4_Model_Classification_Scope/checkpoint-2178
+```
+
+Make sure these folders exist before running the full pipeline.
+
+### 2. Start the Web UI
+
+From the project root, run:
+
+```powershell
+python ui/server.py
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8000
+```
+
+The UI supports:
+
+- PDF upload
+- Live pipeline progress
+- Activity and technical logs
+- Per-step HTML output reports
+- Final ESG scope classification report
+- CSV export
+- Scope overlay images
+
+### 3. Run With the Provided Test PDF
+
+Use this file for a quick end-to-end check:
+
+```text
+C:\Doan\Eco-Lens_Main\test\fpt_corp_2025_p038_p011.pdf
+```
+
+Steps in the UI:
+
+1. Open `http://127.0.0.1:8000`
+2. Upload `test\fpt_corp_2025_p038_p011.pdf`
+3. Click `Run Pipeline`
+4. Wait until the status becomes `Completed`
+5. Open the `Results` tab or click `Report`
+
+### 4. Output Reports in the UI
+
+After a successful run, each pipeline step can be clicked from the left-side step list. Each click opens a dedicated HTML report in a new browser tab:
+
+| Step | Output shown |
+|---|---|
+| PDF Rendering | Rendered PDF page images |
+| OCR | PaddleOCR text, confidence, and bounding boxes |
+| Layout Analysis | LayoutLMv3 labels and word-level confidence |
+| Table Understanding | Detected tables, extracted metrics, table report pages |
+| Layout Blocks | Grouped text/table/figure blocks |
+| Scope Classification | Scope 1 / Scope 2 / Scope 3 / Other classification results |
+| Visualization | Final Eco-Lens report with overlays and CSV export |
+
+The `Results` tab also provides direct buttons for:
+
+- `Final Report`
+- `LayoutLMv3`
+- `Table Understanding`
+- `CSV`
+
+### 5. Output Directory Structure
+
+Each UI run is isolated under:
+
+```text
+runs/{run_id}/
+```
+
+Important folders:
+
+```text
+runs/{run_id}/input/                         Uploaded PDF
+runs/{run_id}/pages/                         Rendered page images
+runs/{run_id}/logs/                          Step logs
+runs/{run_id}/output/step1_ocr/              OCR JSON
+runs/{run_id}/output/step2_layoutlmv3/       LayoutLMv3 labels/artifact
+runs/{run_id}/output/step3_table_understanding/ Table reports and all_tables.json
+runs/{run_id}/output/step4_semantic_mapping/ Scope classification JSON
+runs/{run_id}/output/step5_visualization/    Final HTML report, CSV, overlays
+```
+
+The final report file is:
+
+```text
+runs/{run_id}/output/step5_visualization/index.html
+```
+
+The CSV export file is:
+
+```text
+runs/{run_id}/output/step5_visualization/scope_predictions_all.csv
+```
+
+### 6. CLI Pipeline Alternative
+
+The UI is recommended, but the command-line orchestrator is also available:
+
+```powershell
+python run_all.py --run-id my_run --pdf "C:\Doan\Eco-Lens_Main\test\fpt_corp_2025_p038_p011.pdf" --fresh
+```
+
+Resume a run from a specific step:
+
+```powershell
+python run_all.py --run-id my_run --resume
+python run_all.py --run-id my_run --step 3
+```
+
+### 7. Validation Commands
+
+Run API/UI checks:
+
+```powershell
+python tests/test_ui_api.py
+```
+
+Check Python syntax for changed core files:
+
+```powershell
+python -m py_compile ui/server.py 4.SemanticMapping/visualize_results.py
+```
+
+### 8. Troubleshooting
+
+If `Report` opens a 404 page, verify that this file exists:
+
+```text
+runs/{run_id}/output/step5_visualization/index.html
+```
+
+If overlay images do not show, check:
+
+```text
+runs/{run_id}/output/step5_visualization/overlay/
+```
+
+If Table Understanding page links fail, check:
+
+```text
+runs/{run_id}/output/step3_table_understanding/index.html
+runs/{run_id}/output/step3_table_understanding/{page}/index.html
+```
+
+The UI also exposes fallback HTML endpoints for each step, so successful runs should not open raw JSON/log pages when clicking step output cards.
 
